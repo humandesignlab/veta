@@ -1,0 +1,32 @@
+# Data and generated artifacts (large, regenerable, or local-only).
+# Ignore contents but keep the folder structure via .gitkeep placeholders.
+data/**
+catalogs/**
+reports/**
+!data/**/
+!catalogs/**/
+!reports/**/
+!**/.gitkeep
+*.parquet
+*.pkl
+*.pickle
+
+# Environment
+.env
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# OS / editor
+.DS_Store
+*.swp

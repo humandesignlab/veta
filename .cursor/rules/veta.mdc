@@ -1,0 +1,26 @@
+---
+description: Core Veta project constraints (always apply)
+alwaysApply: true
+---
+
+# Veta constraints
+
+Source of truth: `docs/veta-phase1-spec.md`. Operating guide: `AGENTS.md`.
+
+## Non-negotiable
+
+- NO EM DASHES anywhere: not in code, comments, output, or generated text.
+  Use commas, parentheses, or periods.
+- Python 3.11+. Dependencies limited to `httpx`, `pandas`, `openpyxl`.
+- No web framework, no database, no auth. CLI script only.
+- Code and comments in English. API data is Spanish; leave as-is, never translate.
+- Public data only. Rate limit API to 1 req/sec with retry and backoff.
+
+## Conventions
+
+- Filter tenders client-side for `tipo_procedimiento == "LICITACION PUBLICA"`
+  (no server-side filter exists for procedure type).
+- Send `estatus_alterno: ["VIGENTE"]` for active biddable tenders.
+- Category filtering uses the `id_p_especifica` array (IDs from `clave` catalog).
+- Persist historical aggregations as parquet or pickle under `data/aggregated/`.
+- Keep `data/`, `catalogs/`, and `reports/` gitignored.
