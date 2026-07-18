@@ -2,6 +2,7 @@
 
 Commands:
     python run.py                      annotated shortlist with intelligence
+    python run.py --with-monto         shortlist plus each tender's est. value
     python run.py --raw                unfiltered pull (all active tenders)
     python run.py --buyer IMSS         filter the shortlist by buyer siglas
     python run.py --output report.xlsx also write the shortlist to XLSX
@@ -33,6 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sourcing", metavar="CLAVE", help="supplier lookup for a partida clave")
     parser.add_argument("--scan", action="store_true", help="adjacent opportunity scanner")
     parser.add_argument("--calendar", action="store_true", help="procurement calendar (typical months)")
+    parser.add_argument(
+        "--with-monto",
+        action="store_true",
+        help="also fetch each shortlisted tender's estimated value (slower)",
+    )
     parser.add_argument("--limit", type=int, default=None, help="cap the number of rows shown")
     return parser
 
@@ -114,14 +120,24 @@ def _cmd_raw(buyer: str | None, output: str | None) -> None:
         print(f"\nWrote {len(records)} rows to {output}")
 
 
-def _cmd_shortlist(buyer: str | None, output: str | None, limit: int | None) -> None:
-    from veta import intelligence, output as out
+def _cmd_shortlist(
+    buyer: str | None,
+    output: str | None,
+    limit: int | None,
+    with_monto: bool = False,
+) -> None:
+    from veta import api, intelligence, output as out
 
     shortlist = intelligence.enrich_live()
     if buyer:
         shortlist = [t for t in shortlist if t.siglas.upper() == buyer.upper()]
     if limit is not None:
         shortlist = shortlist[:limit]
+    # Fetch estimated values only for the tenders that survive the filters, so
+    # the extra one-request-per-tender cost scales with what is shown.
+    if with_monto and shortlist:
+        with api.ComprasMXClient() as client:
+            intelligence.attach_monto(shortlist, client)
     print(out.render_console(shortlist))
     if output:
         out.write_xlsx(shortlist, output)
@@ -143,5 +159,5 @@ def main(argv: list[str] | None = None) -> int:
     elif args.raw:
         _cmd_raw(args.buyer, args.output)
     else:
-        _cmd_shortlist(args.buyer, args.output, args.limit)
+        _cmd_shortlist(args.buyer, args.output, args.limit, args.with_monto)
     return 0

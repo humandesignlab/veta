@@ -83,6 +83,11 @@ class EnrichedTender:
     intel: list[BuyerIntel]
     urgency: Urgency
     signal: str
+    # Published estimated amount band from the reqeconomicos endpoint. Both are
+    # None unless the buyer published amounts (rare for licitaciones publicas).
+    monto_min: float | None = None
+    monto_max: float | None = None
+    line_partidas: int | None = None
 
     @property
     def primary_intel(self) -> BuyerIntel | None:
@@ -266,13 +271,41 @@ def build_shortlist(
     return shortlist
 
 
+def attach_monto(
+    shortlist: list[EnrichedTender], client: api.ComprasMXClient
+) -> None:
+    """Fill each tender's estimated amount band via the reqeconomicos endpoint.
+
+    One extra signed request per tender, so this is opt-in. The endpoint is the
+    only public source of a live tender's estimated value, but most licitaciones
+    publicas leave the amounts null (no presupuesto is disclosed pre-fallo), in
+    which case the historical price band remains the working-capital proxy.
+    """
+    for tender in shortlist:
+        if not tender.uuid_procedimiento:
+            continue
+        items = client.fetch_partidas(tender.uuid_procedimiento)
+        tender.line_partidas = len(items) or None
+        mins = [_as_float(i.get("monto_minimo")) for i in items]
+        maxs = [_as_float(i.get("monto_maximo")) for i in items]
+        mins = [m for m in mins if m is not None]
+        maxs = [m for m in maxs if m is not None]
+        tender.monto_min = sum(mins) if mins else None
+        tender.monto_max = sum(maxs) if maxs else None
+
+
 def enrich_live(
     partida_ids: list[int] | None = None,
     id_ley: int | None = 1,
     statuses: list[str] | None = None,
     client: api.ComprasMXClient | None = None,
+    with_monto: bool = False,
 ) -> list[EnrichedTender]:
-    """Fetch live tenders per partida and enrich them with buyer intelligence."""
+    """Fetch live tenders per partida and enrich them with buyer intelligence.
+
+    When with_monto is set, each shortlisted tender is also queried for its
+    published estimated amount band (one extra request per tender).
+    """
     partida_ids = partida_ids or filters.INCLUDE_PARTIDA_IDS
     statuses = statuses or ["VIGENTE"]
     lookup = history.load_lookup()
@@ -283,7 +316,10 @@ def enrich_live(
         records_by_partida = client.fetch_by_partida(
             partida_ids, estatus_alterno=statuses, id_ley=id_ley
         )
+        shortlist = build_shortlist(records_by_partida, lookup)
+        if with_monto:
+            attach_monto(shortlist, client)
     finally:
         if owns_client:
             client.close()
-    return build_shortlist(records_by_partida, lookup)
+    return shortlist

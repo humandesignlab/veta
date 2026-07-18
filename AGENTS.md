@@ -30,10 +30,18 @@ Phase 1 is a report/script, not an app. One client, one report.
 ## API quick reference (see spec section 2 for full detail)
 
 - Base URL: `https://upcp-cnetservicios.buengobierno.gob.mx/whitney/sitiopublico`
-- Endpoints are open (no login) but require signed headers. A bare POST now
-  returns 401. See "Request signing" below. All endpoints POST with
-  `Content-Type: application/json`.
+- Endpoints are open (no login) but require signed headers. A bare request now
+  returns 401. See "Request signing" below. The listing and catalogs are POST
+  with `Content-Type: application/json`; the detail and reqeconomicos endpoints
+  are GET. Every request (POST or GET) needs fresh signed headers.
 - Listing: `POST /expedientes?rows=100&page={n}`, paginate all pages.
+- Detail (GET): `GET /expedientes/{uuid}?id_proceso=procedimiento`, action
+  `GET_DETALLE_PROCEDIMIENTO`. Full buyer/date/guarantee fields plus `anexos`.
+- Partidas + monto (GET): `GET /expedientes/{uuid}/reqeconomicos?id_proceso=procedimiento&rows=50&page=1&grupo=1`,
+  action `GET_REQECONOMICOS`. Only source of a live tender's partida
+  (`clave_p_especifica`) and estimated value band (`monto_minimo` /
+  `monto_maximo`). Both GET endpoints take `id_proceso=procedimiento` (the SPA
+  route literal); passing `0` returns 400.
 - Active tenders: send `estatus_alterno: ["VIGENTE"]`.
 - Category filter: `id_p_especifica` array (IDs from the `clave` catalog).
 - No server-side filter for procedure type. Filter client-side for
@@ -104,10 +112,15 @@ reports/              Generated shortlist files (gitignored)
   tagged with the matching partida. This is how `intelligence.py` joins to the
   historical buyer + partida lookup, no detail endpoint required.
 
-## Known open items to resolve during build
+- Tender detail endpoint: earlier 400s were caused by `id_proceso=0`. The SPA
+  actually sends `id_proceso=procedimiento` (the route segment). With that,
+  `api.fetch_detail(uuid)` and `api.fetch_partidas(uuid)` both return 200.
+  Implemented and verified 2026-07-18.
 
-- Tender detail endpoint (spec section 2.3): a GET to
-  `expedientes/{uuid}?id_proceso=0` with action GET_DETALLE_PROCEDIMIENTO
-  currently returns 400. Not needed for the partida join (solved above), but it
-  is still the likely source of monto estimado and full description. Revisit if
-  the card needs contract value (barrier 2, working capital).
+- Monto estimado (barrier 2, working capital): comes from
+  `api.fetch_partidas` (`monto_minimo` / `monto_maximo`). Opt-in via
+  `--with-monto` (one extra request per shortlisted tender). Most licitaciones
+  publicas with fixed quantities leave it null (no presupuesto disclosed
+  pre-fallo, card shows "not published by buyer"); contrato abierto tenders do
+  publish a min/max band. Where null, the historical price band stays the
+  working-capital proxy.

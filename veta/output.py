@@ -55,6 +55,17 @@ def _aclaraciones_line(tender: EnrichedTender) -> str:
     return f"Clarif.:   {u.aclaraciones.date()} ({state})"
 
 
+def _monto_line(tender: EnrichedTender) -> str | None:
+    """Estimated value line, only when reqeconomicos was queried."""
+    if tender.line_partidas is None:
+        return None
+    if tender.monto_min is None and tender.monto_max is None:
+        return "Est. value: not published by buyer"
+    if tender.monto_min == tender.monto_max:
+        return f"Est. value: {_money(tender.monto_min)}"
+    return f"Est. value: {_money(tender.monto_min)} to {_money(tender.monto_max)}"
+
+
 def _intel_block(intel: BuyerIntel) -> list[str]:
     if not intel.has_history:
         return [
@@ -96,8 +107,11 @@ def render_card(tender: EnrichedTender) -> str:
         _deadline_line(tender),
         _aclaraciones_line(tender),
         f"Urgency:   {tender.urgency.level}",
-        "",
     ]
+    monto_line = _monto_line(tender)
+    if monto_line is not None:
+        lines.append(monto_line)
+    lines.append("")
     primary = tender.primary_intel
     if primary is not None:
         lines.extend(_intel_block(primary))
@@ -135,6 +149,8 @@ def to_dataframe(shortlist: list[EnrichedTender]) -> pd.DataFrame:
                 "days_to_deadline": t.urgency.days_to_deadline,
                 "aclaraciones_passed": t.urgency.aclaraciones_passed,
                 "urgency": t.urgency.level,
+                "est_monto_min": t.monto_min,
+                "est_monto_max": t.monto_max,
                 "signal": t.signal,
                 "hist_partida": p.partida if p else None,
                 "hist_category": p.partida_desc if p else None,

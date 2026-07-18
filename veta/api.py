@@ -34,6 +34,11 @@ CLOCK_RESYNC_SECONDS = 240
 
 LICITACION_PUBLICA = "LICITACIÓN PÚBLICA"
 
+# The detail and reqeconomicos GET endpoints take id_proceso from the SPA route
+# segment, which is the literal string "procedimiento" on the public site (not
+# the numeric 0 used by the POST listing filter). Passing 0 here returns 400.
+DETAIL_ID_PROCESO = "procedimiento"
+
 # Full expedientes filter payload with the confirmed default values. Callers
 # override individual keys (id_p_especifica, estatus_alterno, id_ley, etc.).
 DEFAULT_FILTER: dict[str, Any] = {
@@ -156,8 +161,12 @@ class ComprasMXClient:
         self._sync_clock()
         return auth.build_headers(self._server_time_cdmx(), action=action)
 
-    def _post(
-        self, path: str, body: dict[str, Any], action: str
+    def _request(
+        self,
+        method: str,
+        path: str,
+        action: str,
+        body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         url = f"{self.base_url}/{path.lstrip('/')}"
         last_error: Exception | None = None
@@ -166,7 +175,9 @@ class ComprasMXClient:
             self._last_request_at = time.monotonic()
             try:
                 headers = self._signed_headers(action)
-                response = self._client.post(url, json=body, headers=headers)
+                response = self._client.request(
+                    method, url, json=body, headers=headers
+                )
                 if response.status_code == 200:
                     return response.json()
                 # 401 can happen on a stale clock; force a resync and retry.
@@ -191,6 +202,14 @@ class ComprasMXClient:
         raise RuntimeError(
             f"request to {url} failed after {MAX_RETRIES} attempts"
         ) from last_error
+
+    def _post(
+        self, path: str, body: dict[str, Any], action: str
+    ) -> dict[str, Any]:
+        return self._request("POST", path, action, body=body)
+
+    def _get(self, path: str, action: str) -> dict[str, Any]:
+        return self._request("GET", path, action)
 
     def fetch_expedientes_page(
         self, filters: dict[str, Any], page: int
@@ -259,3 +278,45 @@ class ComprasMXClient:
             )
             results[partida_id] = self.fetch_expedientes(payload)
         return results
+
+    def fetch_detail(self, uuid: str) -> dict[str, Any] | None:
+        """Fetch the full detail record for one tender (GET_DETALLE_PROCEDIMIENTO).
+
+        The listing carries only summary fields; this endpoint adds the buyer
+        contact, dates, guarantees, payment terms, and the anexos (attachments).
+        Returns the single 'registro' dict with an added 'anexos' list, or None
+        when the expediente has no detail registro.
+        """
+        path = f"expedientes/{uuid}?id_proceso={DETAIL_ID_PROCESO}"
+        data = self._get(path, auth.ACTION_GET_DETALLE)
+        block = data.get("data") or {}
+        registros = block.get("registro") or []
+        if not registros:
+            return None
+        record = dict(registros[0])
+        record["anexos"] = block.get("anexos", [])
+        return record
+
+    def fetch_partidas(
+        self, uuid: str, rows: int = 50, grupo: int = 1
+    ) -> list[dict[str, Any]]:
+        """Fetch a tender's economic requirements, i.e. its partidas.
+
+        This is the only endpoint that exposes a live tender's partida clave
+        (clave_p_especifica) and, when the buyer publishes it, its estimated
+        amount band (monto_minimo / monto_maximo). Most licitaciones publicas
+        leave both amounts null. Returns a flat list of partida line items
+        across every requirement group in the response.
+        """
+        path = (
+            f"expedientes/{uuid}/reqeconomicos"
+            f"?id_proceso={DETAIL_ID_PROCESO}&rows={rows}&page=1&grupo={grupo}"
+        )
+        data = self._get(path, auth.ACTION_GET_REQECONOMICOS)
+        payload = data.get("data") or []
+        if not payload:
+            return []
+        items: list[dict[str, Any]] = []
+        for group in payload[0].get("registros", []):
+            items.extend(group.get("data_registros", []))
+        return items
