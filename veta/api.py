@@ -221,3 +221,28 @@ class ComprasMXClient:
         """Total matching records reported by the API (first page metadata)."""
         first = self.fetch_expedientes_page(filters, page=1)
         return int(first["paginacion"].get("total_registros", 0) or 0)
+
+    def fetch_by_partida(
+        self,
+        partida_ids: list[int],
+        estatus_alterno: list[str] | None = None,
+        id_ley: int | None = None,
+        id_proceso: int = 0,
+    ) -> dict[int, list[dict[str, Any]]]:
+        """Fetch tenders once per partida so each result is tagged by partida.
+
+        The listing response does not carry the partida of a tender, but the
+        id_p_especifica filter does. Querying one partida at a time yields the
+        partida -> tenders mapping needed to join with the historical lookup.
+        Returns {partida_id: [records]}.
+        """
+        results: dict[int, list[dict[str, Any]]] = {}
+        for partida_id in partida_ids:
+            payload = build_filter(
+                id_ley=id_ley,
+                id_p_especifica=[partida_id],
+                estatus_alterno=estatus_alterno or [],
+                id_proceso=id_proceso,
+            )
+            results[partida_id] = self.fetch_expedientes(payload)
+        return results

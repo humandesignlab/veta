@@ -99,7 +99,15 @@ reports/              Generated shortlist files (gitignored)
   `https://upcp-compranet.buengobierno.gob.mx/cnetassets/datos_abiertos_contratos_expedientes/Contratos_CompraNet{YEAR}.csv`
   Sizes: 2023 ~188 MB, 2024 ~168 MB, 2025 ~110 MB.
 
+- Tender partida join: the listing response does not carry a tender's partida,
+  so tenders are fetched one partida at a time (`api.fetch_by_partida`) and
+  tagged with the matching partida. This is how `intelligence.py` joins to the
+  historical buyer + partida lookup, no detail endpoint required.
+
 ## Known open items to resolve during build
 
-- Tender detail endpoint (spec section 2.3) is not yet captured. Discover it
-  to get monto and CUCOP; fall back to keyword matching if unavailable.
+- Tender detail endpoint (spec section 2.3): a GET to
+  `expedientes/{uuid}?id_proceso=0` with action GET_DETALLE_PROCEDIMIENTO
+  currently returns 400. Not needed for the partida join (solved above), but it
+  is still the likely source of monto estimado and full description. Revisit if
+  the card needs contract value (barrier 2, working capital).
