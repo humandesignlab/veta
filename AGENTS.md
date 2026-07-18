@@ -30,7 +30,9 @@ Phase 1 is a report/script, not an app. One client, one report.
 ## API quick reference (see spec section 2 for full detail)
 
 - Base URL: `https://upcp-cnetservicios.buengobierno.gob.mx/whitney/sitiopublico`
-- No auth. All endpoints POST with `Content-Type: application/json`.
+- Endpoints are open (no login) but require signed headers. A bare POST now
+  returns 401. See "Request signing" below. All endpoints POST with
+  `Content-Type: application/json`.
 - Listing: `POST /expedientes?rows=100&page={n}`, paginate all pages.
 - Active tenders: send `estatus_alterno: ["VIGENTE"]`.
 - Category filter: `id_p_especifica` array (IDs from the `clave` catalog).
@@ -39,6 +41,24 @@ Phase 1 is a report/script, not an app. One client, one report.
   starting with "LA-").
 - Use `id_ley: 1` (LAASSP), `id_tipo_contratacion` 1 (ADQUISICIONES) and 3
   (SERVICIOS).
+
+## Request signing (reverse-engineered, not in the original spec)
+
+The spec claimed "no auth required". That is no longer true: the portal added
+an anti-bot layer. Every request needs three headers, generated per request
+and single-use (a captured token cannot be replayed):
+
+- `grc`  = base64(RSA_PKCS1v1_5(publicKey, base64(payload)))
+- `igrc` = client ip (default "127.0.0.1")
+- `xgrc` = random 40-char nonce, also embedded inside the payload
+
+payload = comma-joined `[siteKey, ip, dateTime, xgrc, origin, pathname, action]`,
+where dateTime is the server clock (from `/adele/interoperabilidad/tp/reloj`)
+formatted `yyyyMMddHHmmss` at America/Mexico_City (UTC-6), and action is e.g.
+`GET_PROCEDIMIENTOS`. reCAPTCHA v3 loads on the page but is NOT part of the
+listing payload. Implemented in `veta/auth.py` using only stdlib crypto (no new
+dependency). If the portal rotates the RSA public key or changes the payload,
+update `veta/auth.py`.
 
 ## Build order (spec section 3)
 
@@ -54,7 +74,8 @@ Phase 1 is a report/script, not an app. One client, one report.
 ## Module map (spec section 4)
 
 ```
-veta/api.py           ComprasMX API client
+veta/api.py           ComprasMX API client (pagination, rate limit, retry)
+veta/auth.py          Request signing (grc/igrc/xgrc token generation)
 veta/filters.py       Distributor filter profile (INCLUDE/EXCLUDE partida IDs)
 veta/catalogs.py      Confirmed catalog ID constants
 veta/history.py       Historical CSV ingestion and aggregation
