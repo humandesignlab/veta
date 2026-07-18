@@ -222,6 +222,19 @@ class ComprasMXClient:
         first = self.fetch_expedientes_page(filters, page=1)
         return int(first["paginacion"].get("total_registros", 0) or 0)
 
+    def fetch_catalog(
+        self,
+        catalogo: str,
+        action: str,
+        ley_id: int = 1,
+        filtro: Any = None,
+    ) -> list[Any]:
+        """Fetch a lookup catalog (for example catalogo="clave")."""
+        body = {"catalogo": catalogo, "ley_id": ley_id, "filtro": filtro}
+        data = self._post("catalogos", body, action)
+        payload = data.get("data")
+        return payload if isinstance(payload, list) else []
+
     def fetch_by_partida(
         self,
         partida_ids: list[int],
