@@ -6,7 +6,6 @@ lookup tables keyed by buyer + partida. Saves the result as parquet for fast
 loading.
 
 TODO(phase1): implement ingestion + aggregation.
-  - resolve the live CSV host (see AGENTS.md open items)
   - load_contratos(years) -> pandas.DataFrame
   - build_buyer_partida_lookup(df) -> DataFrame with:
       contract_count, distinct_suppliers, new_entrant_rate,
@@ -16,3 +15,11 @@ TODO(phase1): implement ingestion + aggregation.
 
 Gate: lookup loads in under 2 seconds, covers at least 50,000 contracts.
 """
+
+# Confirmed live host (verified 2026-07-18). The spec section 3.2 host
+# funcionpublica.gob.mx is dead; use buengobierno.gob.mx instead.
+CONTRATOS_URL_TEMPLATE = (
+    "https://upcp-compranet.buengobierno.gob.mx/cnetassets/"
+    "datos_abiertos_contratos_expedientes/Contratos_CompraNet{year}.csv"
+)
+CONTRATOS_YEARS = (2023, 2024, 2025)

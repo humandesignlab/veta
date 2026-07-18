@@ -69,10 +69,16 @@ catalogs/             Saved catalog JSONs (gitignored)
 reports/              Generated shortlist files (gitignored)
 ```
 
+## Resolved
+
+- Historical CSV host: use `upcp-compranet.buengobierno.gob.mx` (the prompt's
+  host). The spec section 3.2 host `upcp-compranet.funcionpublica.gob.mx` is
+  dead (does not resolve). Confirmed URL pattern (verified 2026-07-18, all
+  three years return 200 OK):
+  `https://upcp-compranet.buengobierno.gob.mx/cnetassets/datos_abiertos_contratos_expedientes/Contratos_CompraNet{YEAR}.csv`
+  Sizes: 2023 ~188 MB, 2024 ~168 MB, 2025 ~110 MB.
+
 ## Known open items to resolve during build
 
-- Historical CSV host differs between the prompt
-  (`upcp-compranet.buengobierno.gob.mx`) and spec section 3.2
-  (`upcp-compranet.funcionpublica.gob.mx`). Confirm which is live.
 - Tender detail endpoint (spec section 2.3) is not yet captured. Discover it
   to get monto and CUCOP; fall back to keyword matching if unavailable.
