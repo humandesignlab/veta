@@ -20,6 +20,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+For development and running the tests, install the dev extras and run pytest:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
 ## Getting started
 
 Veta answers one question per tender: is this worth a week of bid preparation,

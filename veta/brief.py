@@ -188,7 +188,8 @@ def render_brief(brief: TenderBrief) -> str:
 
 
 def _safe_filename(name: str) -> str:
-    name = re.sub(r"[^\w.\- ]+", "_", name).strip().replace(" ", "_")
+    name = re.sub(r"[^\w.\- ]+", " ", name)
+    name = re.sub(r"[\s_]+", "_", name.strip("_ "))
     return name[:120] or "documento"
 
 
