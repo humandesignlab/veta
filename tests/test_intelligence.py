@@ -284,3 +284,55 @@ def test_signal_weak_when_neither_open_nor_recurring():
 
 def test_signal_no_history():
     assert "NO HISTORY" in intelligence._signal(None)
+
+
+# ---- signal_grade / assign_bucket -------------------------------------------
+
+
+def _tender_for_bucket(signal, days):
+    return EnrichedTender(
+        numero_procedimiento="LA-1", nombre_procedimiento="x", siglas="IMSS",
+        tipo_contratacion="ADQUISICIONES", caracter="NACIONAL",
+        estatus_alterno="VIGENTE", entidad_federativa="CDMX",
+        unidad_compradora="UC", uuid_procedimiento="u",
+        matched_partidas=["25401"], intel=[],
+        urgency=Urgency(None, days, None, None, "RED"), signal=signal,
+    )
+
+
+def test_signal_grade_parses_token():
+    assert intelligence.signal_grade("STRONG: open buyer") == "STRONG"
+    assert intelligence.signal_grade("UNVERIFIED MATCH: ...") == "UNVERIFIED MATCH"
+    assert intelligence.signal_grade("NO HISTORY") == "NO HISTORY"
+
+
+def test_bucket_actuar_when_urgent_and_workable():
+    assert intelligence.assign_bucket(_tender_for_bucket("STRONG: x", 2)) == "ACTUAR"
+
+
+def test_bucket_actuar_includes_passed_deadline():
+    assert intelligence.assign_bucket(_tender_for_bucket("MODERATE: x", -5)) == "ACTUAR"
+
+
+def test_bucket_preparar_when_mid_window_and_workable():
+    assert intelligence.assign_bucket(_tender_for_bucket("STRONG: x", 10)) == "PREPARAR"
+
+
+def test_bucket_monitorear_when_far_out():
+    assert intelligence.assign_bucket(_tender_for_bucket("MODERATE: x", 20)) == "MONITOREAR"
+
+
+def test_bucket_monitorear_when_no_deadline():
+    assert intelligence.assign_bucket(_tender_for_bucket("STRONG: x", None)) == "MONITOREAR"
+
+
+def test_bucket_descartar_for_weak_regardless_of_deadline():
+    assert intelligence.assign_bucket(_tender_for_bucket("WEAK: x", 1)) == "DESCARTAR"
+
+
+def test_bucket_descartar_for_no_history():
+    assert intelligence.assign_bucket(_tender_for_bucket("NO HISTORY", 20)) == "DESCARTAR"
+
+
+def test_bucket_descartar_for_unverified():
+    assert intelligence.assign_bucket(_tender_for_bucket("UNVERIFIED MATCH: x", 2)) == "DESCARTAR"

@@ -7,10 +7,12 @@ output; monetary values are Mexican pesos.
 
 from __future__ import annotations
 
+import datetime
 import json
 
 import pandas as pd
 
+from veta import filters, intelligence
 from veta.intelligence import BuyerIntel, EnrichedTender
 
 MONTHS = [
@@ -19,6 +21,15 @@ MONTHS = [
 ]
 
 CARD_WIDTH = 60
+
+# Spanish labels for the signal grades used in the client report.
+SIGNAL_ES = {
+    "STRONG": "FUERTE",
+    "MODERATE": "MODERADA",
+    "WEAK": "DEBIL",
+    "NO HISTORY": "SIN HISTORIAL",
+    "UNVERIFIED MATCH": "SIN VERIFICAR",
+}
 
 
 def _money(value: float | None) -> str:
@@ -193,9 +204,288 @@ def check_xlsx_writable(path: str) -> None:
         raise RuntimeError(f"output directory does not exist: {parent}")
 
 
-def write_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
-    """Write the shortlist to an XLSX file. Returns the path."""
+def write_raw_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
+    """Write the raw data export (English headers, one sheet). Internal use."""
     check_xlsx_writable(path)
     frame = to_dataframe(shortlist)
     frame.to_excel(path, index=False, engine="openpyxl", sheet_name="shortlist")
+    return path
+
+
+# --------------------------------------------------------------------------- #
+# Client-facing Spanish report (two sheets: Resumen + Detalle).
+# --------------------------------------------------------------------------- #
+
+# Action-bucket cell styling: (background hex, font hex, bold).
+_BUCKET_STYLE = {
+    "ACTUAR": ("FF4444", "FFFFFF", True),
+    "PREPARAR": ("FFAA00", "000000", False),
+    "MONITOREAR": ("44AA44", "FFFFFF", True),
+    "DESCARTAR": ("CCCCCC", "000000", False),
+}
+
+# Signal cell styling reuses the same palette by severity.
+_SIGNAL_STYLE = {
+    "FUERTE": ("44AA44", "FFFFFF", True),
+    "MODERADA": ("FFAA00", "000000", False),
+    "DEBIL": ("FF4444", "FFFFFF", True),
+    "SIN HISTORIAL": ("CCCCCC", "000000", False),
+    "SIN VERIFICAR": ("CCCCCC", "000000", False),
+}
+
+_RESUMEN_HEADERS = [
+    "Accion", "No. Procedimiento", "Institucion", "Estado", "Descripcion",
+    "Categoria", "Fecha Apertura", "Dias Restantes", "Monto Estimado",
+    "Banda Historica", "Mediana Hist.", "Tasa Nuevos", "Señal", "Items",
+    "Competidores",
+]
+_RESUMEN_WIDTHS = [12, 32, 10, 16, 50, 40, 12, 8, 18, 24, 16, 8, 14, 10, 50]
+
+# (dataframe key, Spanish header) for the Detalle sheet, in column order.
+_DETALLE_COLUMNS = [
+    ("numero_procedimiento", "No. Procedimiento"),
+    ("nombre_procedimiento", "Descripcion"),
+    ("siglas", "Institucion"),
+    ("entidad_federativa", "Estado"),
+    ("unidad_compradora", "Unidad Compradora"),
+    ("tipo_contratacion", "Tipo Contratacion"),
+    ("caracter", "Caracter"),
+    ("estatus", "Estatus"),
+    ("matched_partidas", "Partidas Coincidentes"),
+    ("deadline", "Fecha Apertura"),
+    ("days_to_deadline", "Dias Restantes"),
+    ("aclaraciones_passed", "Aclaraciones Pasadas"),
+    ("urgency", "Urgencia"),
+    ("est_monto_min", "Monto Minimo Est."),
+    ("est_monto_max", "Monto Maximo Est."),
+    ("signal", "Senal"),
+    ("hist_partida", "Partida Historica"),
+    ("hist_category", "Categoria Historica"),
+    ("hist_contract_count", "Contratos Historicos"),
+    ("hist_distinct_suppliers", "Proveedores Distintos"),
+    ("hist_new_entrant_rate", "Tasa Nuevos Entrantes"),
+    ("hist_price_p10", "Precio P10"),
+    ("hist_price_median", "Precio Mediana"),
+    ("hist_price_p90", "Precio P90"),
+    ("hist_recurring", "Recurrente"),
+    ("hist_typical_month", "Mes Tipico"),
+    ("hist_top_suppliers", "Top Proveedores"),
+    ("uuid_procedimiento", "UUID"),
+]
+# Detalle keys that hold peso amounts (number format "#,##0").
+_DETALLE_MONEY = {
+    "est_monto_min", "est_monto_max",
+    "hist_price_p10", "hist_price_median", "hist_price_p90",
+}
+
+
+def _senal_es(signal: str) -> str:
+    return SIGNAL_ES.get(intelligence.signal_grade(signal), "SIN HISTORIAL")
+
+
+def _monto_cell(t: EnrichedTender) -> str:
+    if t.monto_min is None and t.monto_max is None:
+        return "No publicado"
+    if t.monto_min == t.monto_max:
+        return f"${(t.monto_min or 0):,.0f} MXN"
+    return f"${(t.monto_min or 0):,.0f} - ${(t.monto_max or 0):,.0f} MXN"
+
+
+def _banda_cell(p: BuyerIntel | None) -> str:
+    if p is None or not p.has_history or p.price_p10 is None:
+        return "Sin historial"
+    return f"${p.price_p10:,.0f} - ${p.price_p90:,.0f} MXN"
+
+
+def _categoria_cell(t: EnrichedTender) -> str:
+    p = t.primary_intel
+    if p is None:
+        return ", ".join(t.matched_partidas)
+    return f"{p.partida} - {p.partida_desc}"[:60]
+
+
+def _items_cell(t: EnrichedTender) -> str:
+    p = t.primary_intel
+    if p is None or not t.line_partidas:
+        return "S/D"
+    return f"{t.line_item_counts.get(p.partida, 0)} de {t.line_partidas}"
+
+
+def _competidores_cell(p: BuyerIntel | None) -> str:
+    if p is None or not p.top_suppliers:
+        return ""
+    names = [str(s.get("proveedor", ""))[:28] for s in p.top_suppliers[:3]]
+    return ", ".join(n for n in names if n)[:120]
+
+
+def _sort_key(t: EnrichedTender) -> tuple[int, datetime.date]:
+    bucket = intelligence.assign_bucket(t)
+    bucket_rank = intelligence.BUCKETS.index(bucket)
+    deadline = t.urgency.deadline.date() if t.urgency.deadline else datetime.date.max
+    return (bucket_rank, deadline)
+
+
+def default_report_path() -> str:
+    """Default client-report filename, dated for the day it is run."""
+    return f"reports/reporte-veta-{datetime.date.today():%Y-%m-%d}.xlsx"
+
+
+def write_client_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
+    """Write the client-facing Spanish report (Resumen + Detalle). Returns path."""
+    check_xlsx_writable(path)
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    ordered = sorted(shortlist, key=_sort_key)
+
+    header_fill = PatternFill("solid", fgColor="1F2937")
+    header_font = Font(bold=True, color="FFFFFF")
+
+    def _fill(bg: str) -> PatternFill:
+        return PatternFill("solid", fgColor=bg)
+
+    wb = Workbook()
+
+    # ---- Sheet 1: Resumen ------------------------------------------------- #
+    ws = wb.active
+    ws.title = "Resumen"
+    ws["A1"] = "VETA - Reporte de Inteligencia"
+    ws["A1"].font = Font(bold=True, size=14)
+    today = datetime.date.today().strftime("%d/%m/%Y")
+    ws["A2"] = (
+        f"Generado: {today} | Perfil: LAASSP, {len(filters.INCLUDE_PARTIDAS)} "
+        "categorias | Licitaciones publicas vigentes"
+    )
+
+    counts = {b: 0 for b in intelligence.BUCKETS}
+    for t in ordered:
+        counts[intelligence.assign_bucket(t)] += 1
+    summary_cells = [
+        ("A4", f"ACTUAR: {counts['ACTUAR']}", "ACTUAR"),
+        ("B4", f"PREPARAR: {counts['PREPARAR']}", "PREPARAR"),
+        ("C4", f"MONITOREAR: {counts['MONITOREAR']}", "MONITOREAR"),
+        ("D4", f"DESCARTAR: {counts['DESCARTAR']}", "DESCARTAR"),
+        ("E4", f"Total: {len(ordered)}", None),
+    ]
+    for ref, text, bucket in summary_cells:
+        cell = ws[ref]
+        cell.value = text
+        if bucket:
+            bg, fg, bold = _BUCKET_STYLE[bucket]
+            cell.fill = _fill(bg)
+            cell.font = Font(bold=True, color=fg)
+        else:
+            cell.fill = _fill("E5E7EB")
+            cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal="center")
+
+    header_row = 6
+    for col, name in enumerate(_RESUMEN_HEADERS, start=1):
+        cell = ws.cell(row=header_row, column=col, value=name)
+        cell.fill = header_fill
+        cell.font = header_font
+    for col, width in enumerate(_RESUMEN_WIDTHS, start=1):
+        ws.column_dimensions[chr(64 + col)].width = width
+
+    red_font = Font(color="CC0000")
+    amber_font = Font(color="B45309")
+    green_font = Font(color="1E7B1E")
+
+    row = header_row + 1
+    for t in ordered:
+        p = t.primary_intel
+        bucket = intelligence.assign_bucket(t)
+        days = t.urgency.days_to_deadline
+        deadline = t.urgency.deadline.date() if t.urgency.deadline else None
+        senal = _senal_es(t.signal)
+
+        ws.cell(row=row, column=1, value=bucket)
+        ws.cell(row=row, column=2, value=t.numero_procedimiento)
+        ws.cell(row=row, column=3, value=t.siglas)
+        ws.cell(row=row, column=4, value=t.entidad_federativa)
+        ws.cell(row=row, column=5, value=(t.nombre_procedimiento or "")[:60])
+        ws.cell(row=row, column=6, value=_categoria_cell(t))
+        dcell = ws.cell(row=row, column=7, value=deadline)
+        if deadline is not None:
+            dcell.number_format = "DD/MM/YYYY"
+        ws.cell(row=row, column=8, value=days)
+        ws.cell(row=row, column=9, value=_monto_cell(t))
+        ws.cell(row=row, column=10, value=_banda_cell(p))
+        mcell = ws.cell(
+            row=row, column=11,
+            value=p.price_median if (p and p.price_median is not None) else "S/D",
+        )
+        if p and p.price_median is not None:
+            mcell.number_format = "#,##0"
+        ws.cell(
+            row=row, column=12,
+            value=f"{p.new_entrant_rate:.0%}" if (p and p.new_entrant_rate is not None) else "S/D",
+        )
+        ws.cell(row=row, column=13, value=senal)
+        ws.cell(row=row, column=14, value=_items_cell(t))
+        ws.cell(row=row, column=15, value=_competidores_cell(p))
+
+        # Conditional styling.
+        bg, fg, bold = _BUCKET_STYLE[bucket]
+        acell = ws.cell(row=row, column=1)
+        acell.fill = _fill(bg)
+        acell.font = Font(bold=True, color=fg)
+
+        if days is not None:
+            dr = ws.cell(row=row, column=8)
+            dr.font = red_font if days <= 3 else amber_font if days <= 7 else green_font
+
+        if p and p.new_entrant_rate is not None:
+            tn = ws.cell(row=row, column=12)
+            if p.new_entrant_rate >= 0.30:
+                tn.font = green_font
+            elif p.new_entrant_rate < 0.15:
+                tn.font = red_font
+
+        sbg, sfg, sbold = _SIGNAL_STYLE.get(senal, ("CCCCCC", "000000", False))
+        scell = ws.cell(row=row, column=13)
+        scell.fill = _fill(sbg)
+        scell.font = Font(bold=sbold, color=sfg)
+        row += 1
+
+    last = max(row - 1, header_row)
+    ws.auto_filter.ref = f"A{header_row}:O{last}"
+    ws.freeze_panes = "A7"
+
+    # ---- Sheet 2: Detalle ------------------------------------------------- #
+    ws2 = wb.create_sheet("Detalle")
+    frame = to_dataframe(shortlist)
+    headers = ["Accion"] + [es for _key, es in _DETALLE_COLUMNS]
+    for col, name in enumerate(headers, start=1):
+        cell = ws2.cell(row=1, column=col, value=name)
+        cell.fill = header_fill
+        cell.font = header_font
+
+    for i, t in enumerate(shortlist):
+        r = i + 2
+        record = frame.iloc[i]
+        ws2.cell(row=r, column=1, value=intelligence.assign_bucket(t))
+        for col, (key, _es) in enumerate(_DETALLE_COLUMNS, start=2):
+            value = record[key]
+            if pd.isna(value):
+                value = None
+            elif hasattr(value, "item"):  # numpy scalar -> python scalar
+                value = value.item()
+            cell = ws2.cell(row=r, column=col, value=value)
+            if key in _DETALLE_MONEY and value is not None:
+                cell.number_format = "#,##0"
+            elif key == "hist_new_entrant_rate" and value is not None:
+                cell.number_format = "0%"
+            elif key == "deadline" and value is not None:
+                cell.number_format = "DD/MM/YYYY"
+
+    last2 = len(shortlist) + 1
+    end_col = get_column_letter(len(headers))
+    ws2.auto_filter.ref = f"A1:{end_col}{last2}"
+    ws2.column_dimensions["A"].width = 12
+    ws2.column_dimensions["B"].width = 24
+    ws2.column_dimensions["C"].width = 50
+
+    wb.save(path)
     return path

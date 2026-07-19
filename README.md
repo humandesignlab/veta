@@ -85,7 +85,9 @@ python run.py --scan                  # see where your blind spots are
 python run.py                      # annotated shortlist with intelligence
 python run.py --raw                # unfiltered pull (all active tenders)
 python run.py --buyer IMSS         # filter by specific buyer
-python run.py --output report.xlsx # write the shortlist to an XLSX file
+python run.py --output             # write the client report to reports/reporte-veta-{date}.xlsx
+python run.py --output report.xlsx # or to a specific path (Resumen + Detalle, Spanish)
+python run.py --raw-output raw.xlsx # write the raw single-sheet export (internal/debug)
 python run.py --sourcing 51501     # supplier lookup for a partida clave
 python run.py --brief LA-07-...    # full bid brief for one tender (numero or uuid)
 python run.py --brief LA-07-... --download reports/anexos  # brief + download attachments
@@ -98,6 +100,22 @@ python run.py --limit 5            # cap rows shown (combine with any command)
 Note: live commands rate limit to 1 request per second against the portal (it
 signs anti-bot headers under the hood), so they take a little time to run. That
 is expected, not a hang.
+
+### The client report (`--output`)
+
+`--output` writes a share-ready, Spanish-language workbook with two sheets:
+
+- **Resumen:** a one-page dashboard. Each tender is placed in an action bucket
+  and the sheet is sorted by bucket, then by deadline:
+  - **ACTUAR** (red): workable signal closing in <= 3 days.
+  - **PREPARAR** (amber): workable signal closing in 4-14 days.
+  - **MONITOREAR** (green): workable signal closing in > 14 days.
+  - **DESCARTAR** (gray): weak, no-history, or unverified match, at any deadline.
+  A colored summary bar at the top counts each bucket. Signal grades are shown
+  in Spanish (FUERTE / MODERADA / DEBIL / SIN HISTORIAL / SIN VERIFICAR).
+- **Detalle:** every field, one row per tender, for auditing a specific tender.
+
+Use `--raw-output` for the old English single-sheet export (internal/debug).
 
 ## Project layout
 

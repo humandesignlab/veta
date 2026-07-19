@@ -31,7 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--build", action="store_true", help="(re)build the historical cache")
     parser.add_argument("--raw", action="store_true", help="unfiltered pull of active tenders")
     parser.add_argument("--buyer", metavar="SIGLAS", help="filter shortlist by buyer siglas")
-    parser.add_argument("--output", metavar="FILE", help="write the shortlist to an XLSX file")
+    parser.add_argument(
+        "--output", metavar="FILE", nargs="?", const="",
+        help="write the client report (Resumen + Detalle); omit FILE for reports/reporte-veta-{date}.xlsx",
+    )
+    parser.add_argument("--raw-output", metavar="FILE", dest="raw_output", help="write the raw single-sheet export (internal/debug)")
     parser.add_argument("--sourcing", metavar="CLAVE", help="supplier lookup for a partida clave")
     parser.add_argument("--brief", metavar="NUMERO", help="full bid brief for one tender (numero or uuid)")
     parser.add_argument("--download", metavar="DIR", help="with --brief, download attachments to DIR")
@@ -138,12 +142,19 @@ def _cmd_shortlist(
     buyer: str | None,
     output: str | None,
     limit: int | None,
+    raw_output: str | None = None,
 ) -> None:
     from veta import intelligence, output as out
 
-    # Fail fast before the multi-minute fetch if the XLSX target is unwritable.
+    # `--output` with no filename falls back to a dated default in reports/.
+    if output == "":
+        output = out.default_report_path()
+
+    # Fail fast before the multi-minute fetch if any XLSX target is unwritable.
     if output:
         out.check_xlsx_writable(output)
+    if raw_output:
+        out.check_xlsx_writable(raw_output)
 
     # Every tender is verified against its real line items and annotated with
     # its estimated value during enrichment (progress prints to stderr).
@@ -154,8 +165,11 @@ def _cmd_shortlist(
         shortlist = shortlist[:limit]
     print(out.render_console(shortlist))
     if output:
-        out.write_xlsx(shortlist, output)
-        print(f"\nWrote {len(shortlist)} tenders to {output}")
+        out.write_client_xlsx(shortlist, output)
+        print(f"\nWrote client report ({len(shortlist)} tenders) to {output}")
+    if raw_output:
+        out.write_raw_xlsx(shortlist, raw_output)
+        print(f"Wrote raw export ({len(shortlist)} tenders) to {raw_output}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -175,5 +189,5 @@ def main(argv: list[str] | None = None) -> int:
     elif args.raw:
         _cmd_raw(args.buyer, args.output)
     else:
-        _cmd_shortlist(args.buyer, args.output, args.limit)
+        _cmd_shortlist(args.buyer, args.output, args.limit, args.raw_output)
     return 0

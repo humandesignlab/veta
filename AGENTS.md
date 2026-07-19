@@ -96,7 +96,7 @@ veta/intelligence.py  Buyer intelligence enrichment
 veta/sourcing.py      Supplier sourcing reverse lookup
 veta/brief.py         Single-tender bid brief + attachment download
 veta/scanner.py       Adjacent opportunity scanner
-veta/output.py        Console and file output formatters
+veta/output.py        Console cards, client XLSX report, raw XLSX export
 veta/cli.py           CLI argument parsing
 data/contratos/       Raw downloaded CSVs (gitignored)
 data/aggregated/      Precomputed lookups (gitignored)
@@ -144,3 +144,15 @@ reports/              Generated shortlist files (gitignored)
   tenders; progress prints to stderr). Most licitaciones publicas leave the
   amount null (card shows "not published by buyer"); where null, the historical
   price band stays the working-capital proxy.
+
+- Client report (`--output`): `output.write_client_xlsx` builds a two-sheet,
+  Spanish workbook for the commercial director. Sheet "Resumen" is a scannable
+  dashboard (colored summary bar + one row per tender, sorted by action bucket
+  then deadline); sheet "Detalle" is the full data with Spanish headers.
+  `intelligence.assign_bucket` maps each tender to ACTUAR / PREPARAR /
+  MONITOREAR / DESCARTAR: a weak/no-history/unverified signal is DESCARTAR at
+  any deadline, otherwise it buckets by days to close (<=3, 4-14, >14).
+  `intelligence.signal_grade` parses the grade token; `output.SIGNAL_ES` maps it
+  to Spanish (FUERTE / MODERADA / DEBIL / SIN HISTORIAL / SIN VERIFICAR). The old
+  English single-sheet export is still available as `write_raw_xlsx`
+  (`--raw-output`).

@@ -232,6 +232,42 @@ def _signal(intel: BuyerIntel | None) -> str:
     return f"{grade}: " + ", ".join(parts)
 
 
+def signal_grade(signal: str) -> str:
+    """Extract the grade token from a signal string.
+
+    Signals are formatted "<GRADE>: <detail>" (or just "<GRADE>"), so the grade
+    is the text before the first colon. Returns one of STRONG, MODERATE, WEAK,
+    NO HISTORY, UNVERIFIED MATCH (uppercased).
+    """
+    return (signal or "").split(":", 1)[0].strip().upper()
+
+
+# Decision buckets for the client report, in report sort order.
+BUCKETS = ["ACTUAR", "PREPARAR", "MONITOREAR", "DESCARTAR"]
+
+
+def assign_bucket(tender: EnrichedTender) -> str:
+    """Map a tender to an action bucket for the client dashboard.
+
+    A weak or unproven signal is not worth chasing even under deadline pressure,
+    so it goes to DESCARTAR regardless of timing. Everything with a workable
+    (STRONG/MODERATE) signal is then bucketed by how soon it closes:
+
+    - DESCARTAR: signal WEAK, NO HISTORY, or UNVERIFIED MATCH (any deadline)
+    - ACTUAR:    workable signal closing in <= 3 days (includes passed deadlines)
+    - PREPARAR:  workable signal closing in 4-14 days
+    - MONITOREAR: workable signal closing in > 14 days (or no deadline listed)
+    """
+    if signal_grade(tender.signal) not in ("STRONG", "MODERATE"):
+        return "DESCARTAR"
+    days = tender.urgency.days_to_deadline
+    if days is not None and days <= URGENCY_RED_DAYS:
+        return "ACTUAR"
+    if days is not None and days <= 14:
+        return "PREPARAR"
+    return "MONITOREAR"
+
+
 def build_shortlist(
     records_by_partida: dict[int, list[dict[str, Any]]],
     lookup: pd.DataFrame,

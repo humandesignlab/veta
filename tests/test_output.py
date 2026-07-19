@@ -67,3 +67,43 @@ def test_to_dataframe_has_monto_columns():
     assert "est_monto_max" in frame.columns
     assert frame.iloc[0]["est_monto_min"] == 100.0
     assert frame.iloc[0]["numero_procedimiento"] == "LA-1"
+
+
+def test_senal_es_translates_grades():
+    assert output._senal_es("STRONG: x") == "FUERTE"
+    assert output._senal_es("MODERATE: x") == "MODERADA"
+    assert output._senal_es("WEAK: x") == "DEBIL"
+    assert output._senal_es("NO HISTORY") == "SIN HISTORIAL"
+    assert output._senal_es("UNVERIFIED MATCH: x") == "SIN VERIFICAR"
+
+
+def test_monto_cell_not_published_and_band():
+    assert output._monto_cell(_tender(monto_min=None, monto_max=None)) == "No publicado"
+    assert output._monto_cell(_tender(monto_min=100.0, monto_max=200.0)) == "$100 - $200 MXN"
+
+
+def test_default_report_path_is_dated():
+    import datetime
+
+    path = output.default_report_path()
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    assert path == f"reports/reporte-veta-{today}.xlsx"
+
+
+def test_write_client_xlsx_has_two_named_sheets(tmp_path):
+    from openpyxl import load_workbook
+
+    path = str(tmp_path / "reporte.xlsx")
+    t = _tender(line_partidas=50, monto_min=100.0, monto_max=200.0)
+    output.write_client_xlsx([t], path)
+
+    wb = load_workbook(path)
+    assert wb.sheetnames == ["Resumen", "Detalle"]
+    resumen = wb["Resumen"]
+    assert resumen["A1"].value == "VETA - Reporte de Inteligencia"
+    assert resumen["A6"].value == "Accion"
+    # Header row 6, first data row 7 carries the tender.
+    assert resumen["B7"].value == "LA-1"
+    detalle = wb["Detalle"]
+    assert detalle["A1"].value == "Accion"
+    assert detalle["B1"].value == "No. Procedimiento"
