@@ -44,6 +44,7 @@ DEFAULT_IP = "127.0.0.1"
 ACTION_GET_PROCEDIMIENTOS = "GET_PROCEDIMIENTOS"
 ACTION_GET_DETALLE = "GET_DETALLE_PROCEDIMIENTO"
 ACTION_GET_REQECONOMICOS = "GET_REQECONOMICOS"
+ACTION_DOWNLOAD_FILE = "DOWNLOAD_FILE"
 
 # The xgrc nonce alphabet, exactly as built by the SPA getXGRC function. The
 # pipe characters are part of the set (71 characters, indexed 0..70).

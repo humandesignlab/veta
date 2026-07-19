@@ -42,6 +42,11 @@ Phase 1 is a report/script, not an app. One client, one report.
   (`clave_p_especifica`) and estimated value band (`monto_minimo` /
   `monto_maximo`). Both GET endpoints take `id_proceso=procedimiento` (the SPA
   route literal); passing `0` returns 400.
+- Attachment download (GET): `GET {qr_documentosUrl}?id_documento={uuid_documento}&user=sitiopublico`,
+  action `DOWNLOAD_FILE`, where qr_documentosUrl is
+  `https://upcp-cnetservicios.buengobierno.gob.mx/norah/documentos/recursos/ulck`.
+  Returns the raw file (usually application/pdf). The `uuid_documento` comes
+  from a detail record's `anexos`.
 - Active tenders: send `estatus_alterno: ["VIGENTE"]`.
 - Category filter: `id_p_especifica` array (IDs from the `clave` catalog).
 - No server-side filter for procedure type. Filter client-side for
@@ -89,6 +94,7 @@ veta/catalogs.py      Confirmed catalog ID constants
 veta/history.py       Historical CSV ingestion and aggregation
 veta/intelligence.py  Buyer intelligence enrichment
 veta/sourcing.py      Supplier sourcing reverse lookup
+veta/brief.py         Single-tender bid brief + attachment download
 veta/scanner.py       Adjacent opportunity scanner
 veta/output.py        Console and file output formatters
 veta/cli.py           CLI argument parsing

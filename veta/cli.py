@@ -3,6 +3,8 @@
 Commands:
     python run.py                      annotated shortlist with intelligence
     python run.py --with-monto         shortlist plus each tender's est. value
+    python run.py --brief LA-...       full bid brief for one tender
+    python run.py --brief LA-... --download reports/anexos   brief + attachments
     python run.py --raw                unfiltered pull (all active tenders)
     python run.py --buyer IMSS         filter the shortlist by buyer siglas
     python run.py --output report.xlsx also write the shortlist to XLSX
@@ -32,6 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--buyer", metavar="SIGLAS", help="filter shortlist by buyer siglas")
     parser.add_argument("--output", metavar="FILE", help="write the shortlist to an XLSX file")
     parser.add_argument("--sourcing", metavar="CLAVE", help="supplier lookup for a partida clave")
+    parser.add_argument("--brief", metavar="NUMERO", help="full bid brief for one tender (numero or uuid)")
+    parser.add_argument("--download", metavar="DIR", help="with --brief, download attachments to DIR")
     parser.add_argument("--scan", action="store_true", help="adjacent opportunity scanner")
     parser.add_argument("--calendar", action="store_true", help="procurement calendar (typical months)")
     parser.add_argument(
@@ -65,6 +69,22 @@ def _cmd_sourcing(clave: str, limit: int | None) -> None:
         )
         if s.top_buyers:
             print(f"       top buyers: {', '.join(s.top_buyers)}")
+
+
+def _cmd_brief(identifier: str, download: str | None) -> None:
+    from veta import api, brief as brief_mod
+
+    with api.ComprasMXClient() as client:
+        brief = brief_mod.build_brief(client, identifier)
+        if brief is None:
+            print(f"No tender found for '{identifier}'.")
+            return
+        print(brief_mod.render_brief(brief))
+        if download:
+            paths = brief_mod.download_anexos(client, brief, download)
+            print(f"\nDownloaded {len(paths)} attachment(s) to {download}:")
+            for p in paths:
+                print(f"  {p}")
 
 
 def _cmd_scan(limit: int | None) -> None:
@@ -152,6 +172,8 @@ def main(argv: list[str] | None = None) -> int:
         _cmd_build()
     elif args.sourcing:
         _cmd_sourcing(args.sourcing, args.limit)
+    elif args.brief:
+        _cmd_brief(args.brief, args.download)
     elif args.scan:
         _cmd_scan(args.limit)
     elif args.calendar:

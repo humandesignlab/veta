@@ -26,6 +26,11 @@ CLOCK_URL = (
     "https://upcp-cnetservicios.buengobierno.gob.mx"
     "/adele/interoperabilidad/tp/reloj"
 )
+# Anexo (attachment) download endpoint. Separate host path from the API base.
+DOCUMENTS_URL = (
+    "https://upcp-cnetservicios.buengobierno.gob.mx"
+    "/norah/documentos/recursos/ulck"
+)
 
 DEFAULT_PAGE_SIZE = 100
 MIN_REQUEST_INTERVAL = 1.0  # seconds, 1 request per second
@@ -161,14 +166,15 @@ class ComprasMXClient:
         self._sync_clock()
         return auth.build_headers(self._server_time_cdmx(), action=action)
 
-    def _request(
+    def _send(
         self,
         method: str,
-        path: str,
+        url: str,
         action: str,
         body: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        url = f"{self.base_url}/{path.lstrip('/')}"
+        params: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        """Signed, throttled, retried request. Returns the raw response."""
         last_error: Exception | None = None
         for attempt in range(MAX_RETRIES):
             self._throttle()
@@ -176,10 +182,10 @@ class ComprasMXClient:
             try:
                 headers = self._signed_headers(action)
                 response = self._client.request(
-                    method, url, json=body, headers=headers
+                    method, url, json=body, params=params, headers=headers
                 )
                 if response.status_code == 200:
-                    return response.json()
+                    return response
                 # 401 can happen on a stale clock; force a resync and retry.
                 if response.status_code == 401:
                     self._sync_clock(force=True)
@@ -202,6 +208,16 @@ class ComprasMXClient:
         raise RuntimeError(
             f"request to {url} failed after {MAX_RETRIES} attempts"
         ) from last_error
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        action: str,
+        body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        return self._send(method, url, action, body=body).json()
 
     def _post(
         self, path: str, body: dict[str, Any], action: str
@@ -320,3 +336,23 @@ class ComprasMXClient:
         for group in payload[0].get("registros", []):
             items.extend(group.get("data_registros", []))
         return items
+
+    def fetch_by_numero(self, numero: str) -> dict[str, Any] | None:
+        """Find a single tender by its numero_procedimiento (any status).
+
+        Used to resolve a human-facing procedure number to its uuid before
+        fetching detail. Returns the first matching listing record, or None.
+        """
+        payload = build_filter(numero_procedimiento=numero)
+        records = self.fetch_expedientes(payload)
+        return records[0] if records else None
+
+    def download_document(self, uuid_documento: str) -> tuple[bytes, str]:
+        """Download one anexo document. Returns (content, content_type)."""
+        response = self._send(
+            "GET",
+            DOCUMENTS_URL,
+            auth.ACTION_DOWNLOAD_FILE,
+            params={"id_documento": uuid_documento, "user": "sitiopublico"},
+        )
+        return response.content, response.headers.get("content-type", "")

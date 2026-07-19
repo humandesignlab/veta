@@ -74,6 +74,8 @@ python run.py --raw                # unfiltered pull (all active tenders)
 python run.py --buyer IMSS         # filter by specific buyer
 python run.py --output report.xlsx # write the shortlist to an XLSX file
 python run.py --sourcing 51501     # supplier lookup for a partida clave
+python run.py --brief LA-07-...    # full bid brief for one tender (numero or uuid)
+python run.py --brief LA-07-... --download reports/anexos  # brief + download attachments
 python run.py --scan               # adjacent opportunity scanner
 python run.py --calendar           # procurement calendar (typical months)
 python run.py --build              # (re)build the historical cache
