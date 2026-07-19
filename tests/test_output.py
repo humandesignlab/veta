@@ -39,9 +39,9 @@ def test_month_name():
     assert output._month_name(13) == "n/a"
 
 
-def test_monto_line_not_queried_returns_none():
-    t = _tender(line_partidas=None)
-    assert output._monto_line(t) is None
+def test_monto_line_always_shown_not_published():
+    t = _tender(line_partidas=None, monto_min=None, monto_max=None)
+    assert output._monto_line(t) == "Est. value: not published by buyer"
 
 
 def test_monto_line_not_published():

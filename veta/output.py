@@ -55,10 +55,8 @@ def _aclaraciones_line(tender: EnrichedTender) -> str:
     return f"Clarif.:   {u.aclaraciones.date()} ({state})"
 
 
-def _monto_line(tender: EnrichedTender) -> str | None:
-    """Estimated value line, only when reqeconomicos was queried."""
-    if tender.line_partidas is None:
-        return None
+def _monto_line(tender: EnrichedTender) -> str:
+    """Estimated value line. Always shown; buyers rarely publish amounts."""
     if tender.monto_min is None and tender.monto_max is None:
         return "Est. value: not published by buyer"
     if tender.monto_min == tender.monto_max:
@@ -107,14 +105,18 @@ def render_card(tender: EnrichedTender) -> str:
         _deadline_line(tender),
         _aclaraciones_line(tender),
         f"Urgency:   {tender.urgency.level}",
+        _monto_line(tender),
+        "",
     ]
-    monto_line = _monto_line(tender)
-    if monto_line is not None:
-        lines.append(monto_line)
-    lines.append("")
     primary = tender.primary_intel
     if primary is not None:
         lines.extend(_intel_block(primary))
+        if tender.line_partidas:
+            matched = tender.line_item_counts.get(primary.partida, 0)
+            share = f"  Line items in this category: {matched} of {tender.line_partidas}"
+            if matched and matched * 2 < tender.line_partidas:
+                share += "  [minority line]"
+            lines.append(share)
     lines.append("")
     lines.append(f"SIGNAL: {tender.signal}")
     lines.append(bar)

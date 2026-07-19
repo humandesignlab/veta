@@ -50,17 +50,24 @@ Every other command reads the cached lookup, so it is fast after this step.
 python run.py
 ```
 
+Every run verifies each tender against its real line items and looks up its
+published estimated value (one request per tender), so a full pull takes a
+couple of minutes; a progress counter prints while it works.
+
 Each tender prints an intelligence card. Read it top to bottom:
 
 - **Urgency (RED / AMBER / GREEN):** RED means the deadline is within 3 days, or
   the clarifications date already passed. Triage on this first.
 - **SIGNAL line:** the headline verdict. `STRONG` means an open buyer in a
   recurring category. `NO HISTORY` means the buyer and category were not seen in
-  the 2023-2025 data, so you would be bidding blind.
+  the 2023-2025 data, so you would be bidding blind. `UNVERIFIED MATCH` means the
+  category the listing filtered on does not actually appear in the tender.
 - **New entrant rate / [OPEN BUYER]:** the key number. At or above 30 percent,
   outsiders actually win here; below that, it tends to be a closed shop.
-- **Contract value / Median value:** what this buyer has historically paid in
-  this category. Your working-capital reality check.
+- **Est. value / Median value:** what the buyer published for this tender (often
+  "not published"), and what they have historically paid in the category.
+- **Line items in this category:** how much of the tender is actually your
+  category. `[minority line]` warns that the tender is mostly something else.
 - **Top winners:** who you would be competing against.
 
 ### 3. A suggested first session
@@ -76,7 +83,6 @@ python run.py --scan                  # see where your blind spots are
 
 ```bash
 python run.py                      # annotated shortlist with intelligence
-python run.py --with-monto         # shortlist plus each tender's estimated value (slower)
 python run.py --raw                # unfiltered pull (all active tenders)
 python run.py --buyer IMSS         # filter by specific buyer
 python run.py --output report.xlsx # write the shortlist to an XLSX file

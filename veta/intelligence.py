@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import sys
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -92,13 +93,26 @@ class EnrichedTender:
     monto_min: float | None = None
     monto_max: float | None = None
     line_partidas: int | None = None
+    # How many of the tender's real line items fall in each matched partida,
+    # filled by verify_and_enrich. Lets the card show whether a match is the
+    # tender's main subject or a minority line (e.g. 2 medical items of 50).
+    line_item_counts: dict[str, int] = field(default_factory=dict)
 
     @property
     def primary_intel(self) -> BuyerIntel | None:
-        """The matched partida with the most historical data (headline card)."""
+        """The headline partida: most real line items, then most history.
+
+        Ranking by actual line-item count first keeps a tender's dominant
+        subject at the top, so a kitchen tender that also carries a couple of
+        medical items does not lead with the medical category just because
+        medical has more national history.
+        """
         if not self.intel:
             return None
-        return max(self.intel, key=lambda b: b.contract_count)
+        return max(
+            self.intel,
+            key=lambda b: (self.line_item_counts.get(b.partida, 0), b.contract_count),
+        )
 
 
 def _partida_maps() -> tuple[dict[int, str], dict[str, str]]:
@@ -288,27 +302,75 @@ def build_shortlist(
     return shortlist
 
 
-def attach_monto(
-    shortlist: list[EnrichedTender], client: api.ComprasMXClient
+def verify_and_enrich(
+    shortlist: list[EnrichedTender],
+    client: api.ComprasMXClient,
+    progress: bool = False,
 ) -> None:
-    """Fill each tender's estimated amount band via the reqeconomicos endpoint.
+    """Verify each tender's partidas against its real line items and add monto.
 
-    One extra signed request per tender, so this is opt-in. The endpoint is the
-    only public source of a live tender's estimated value, but most licitaciones
-    publicas leave the amounts null (no presupuesto is disclosed pre-fallo), in
-    which case the historical price band remains the working-capital proxy.
+    The listing filters by partida, but the API returns tenders whose primary
+    subject is different (for example "articulos de cocina" surfacing under the
+    medical-supplies filter). This calls fetch_partidas(uuid) once per tender to
+    read the actual line items (clave_p_especifica) and:
+
+    - keeps only the BuyerIntel whose partida truly appears in the line items,
+      recomputing primary_intel and the signal from the verified set;
+    - flags the signal "UNVERIFIED MATCH" when a tender that had matched
+      intelligence turns out not to contain any of those partidas;
+    - fills the estimated amount band (monto_minimo / monto_maximo).
+
+    One signed request per tender (about 1 req/sec), so roughly two minutes for
+    a full 118-tender shortlist. Mutates the tenders in place.
     """
-    for tender in shortlist:
+    total = len(shortlist)
+    for i, tender in enumerate(shortlist, 1):
+        if progress:
+            print(f"Enriching {i}/{total}...", end="\r", file=sys.stderr, flush=True)
         if not tender.uuid_procedimiento:
             continue
         items = client.fetch_partidas(tender.uuid_procedimiento)
+
+        # Estimated amount band (summed across the tender's line items).
         tender.line_partidas = len(items) or None
-        mins = [_as_float(i.get("monto_minimo")) for i in items]
-        maxs = [_as_float(i.get("monto_maximo")) for i in items]
+        mins = [_as_float(it.get("monto_minimo")) for it in items]
+        maxs = [_as_float(it.get("monto_maximo")) for it in items]
         mins = [m for m in mins if m is not None]
         maxs = [m for m in maxs if m is not None]
         tender.monto_min = sum(mins) if mins else None
         tender.monto_max = sum(maxs) if maxs else None
+
+        # Verify matched partidas against the real line-item claves, counting
+        # how many line items each clave has so the card can show its weight.
+        clave_counts: dict[str, int] = {}
+        for it in items:
+            clave = it.get("clave_p_especifica")
+            if clave:
+                clave = str(clave).strip()
+                clave_counts[clave] = clave_counts.get(clave, 0) + 1
+        real_claves = set(clave_counts)
+
+        original = tender.intel
+        verified = [b for b in original if b.partida in real_claves]
+        if verified:
+            tender.intel = verified
+            tender.matched_partidas = [b.partida for b in verified]
+            tender.line_item_counts = {
+                b.partida: clave_counts[b.partida] for b in verified
+            }
+            primary = tender.primary_intel
+            tender.signal = _signal(primary)
+        elif original:
+            # The tender had matched intelligence, but none of those partidas
+            # appear in its actual line items: the match is not trustworthy.
+            tender.intel = []
+            tender.signal = (
+                "UNVERIFIED MATCH: tender line items do not include the "
+                "filtered partida"
+            )
+        # If there was no matched intelligence to begin with, leave as-is.
+    if progress and total:
+        print(f"Enriched {total}/{total}.        ", file=sys.stderr, flush=True)
 
 
 def enrich_live(
@@ -316,12 +378,14 @@ def enrich_live(
     id_ley: int | None = 1,
     statuses: list[str] | None = None,
     client: api.ComprasMXClient | None = None,
-    with_monto: bool = False,
+    progress: bool = False,
 ) -> list[EnrichedTender]:
     """Fetch live tenders per partida and enrich them with buyer intelligence.
 
-    When with_monto is set, each shortlisted tender is also queried for its
-    published estimated amount band (one extra request per tender).
+    Every shortlisted tender is verified against its real line items (dropping
+    false partida matches) and annotated with its estimated amount band. This
+    adds one request per tender, so a full run takes a couple of minutes; set
+    progress=True to print a counter while it works.
     """
     partida_ids = partida_ids or filters.INCLUDE_PARTIDA_IDS
     statuses = statuses or ["VIGENTE"]
@@ -334,8 +398,7 @@ def enrich_live(
             partida_ids, estatus_alterno=statuses, id_ley=id_ley
         )
         shortlist = build_shortlist(records_by_partida, lookup)
-        if with_monto:
-            attach_monto(shortlist, client)
+        verify_and_enrich(shortlist, client, progress=progress)
     finally:
         if owns_client:
             client.close()

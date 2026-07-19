@@ -132,10 +132,15 @@ reports/              Generated shortlist files (gitignored)
   `api.fetch_detail(uuid)` and `api.fetch_partidas(uuid)` both return 200.
   Implemented and verified 2026-07-18.
 
-- Monto estimado (barrier 2, working capital): comes from
-  `api.fetch_partidas` (`monto_minimo` / `monto_maximo`). Opt-in via
-  `--with-monto` (one extra request per shortlisted tender). Most licitaciones
-  publicas with fixed quantities leave it null (no presupuesto disclosed
-  pre-fallo, card shows "not published by buyer"); contrato abierto tenders do
-  publish a min/max band. Where null, the historical price band stays the
-  working-capital proxy.
+- Partida verification + monto (default): `intelligence.verify_and_enrich`
+  calls `api.fetch_partidas(uuid)` once per shortlisted tender to read the real
+  line items. The listing filters by partida but returns tenders whose actual
+  subject differs (for example kitchen articles surfacing under the medical
+  filter), so each tender's intel is filtered to the partidas that truly appear
+  in its line items; a tender with matched intel but no matching line item is
+  flagged "UNVERIFIED MATCH". The same call fills the estimated amount band
+  (`monto_minimo` / `monto_maximo`, summed across line items). This runs on
+  every shortlist (about 1 req/sec per tender, roughly two minutes for ~118
+  tenders; progress prints to stderr). Most licitaciones publicas leave the
+  amount null (card shows "not published by buyer"); where null, the historical
+  price band stays the working-capital proxy.

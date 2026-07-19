@@ -139,7 +139,7 @@ def test_build_shortlist_sorts_red_before_green():
     assert shortlist[0].numero_procedimiento == "LA-RED"
 
 
-# ---- attach_monto -----------------------------------------------------------
+# ---- verify_and_enrich (partida verification + monto) -----------------------
 
 class _FakeClient:
     def __init__(self, partidas):
@@ -149,7 +149,15 @@ class _FakeClient:
         return self._partidas
 
 
-def _bare_tender(uuid="uuid-1"):
+def _intel(partida="25401", contract_count=40):
+    return BuyerIntel(
+        siglas="IMSS", partida=partida, partida_desc="desc",
+        has_history=True, contract_count=contract_count, distinct_suppliers=12,
+        new_entrant_rate=0.35, is_recurring=True, price_median=500_000.0,
+    )
+
+
+def _bare_tender(uuid="uuid-1", intel=None, matched=None):
     return EnrichedTender(
         numero_procedimiento="LA-1",
         nombre_procedimiento="x",
@@ -160,32 +168,79 @@ def _bare_tender(uuid="uuid-1"):
         entidad_federativa="CDMX",
         unidad_compradora="UC1",
         uuid_procedimiento=uuid,
-        matched_partidas=["25401"],
-        intel=[],
+        matched_partidas=matched if matched is not None else ["25401"],
+        intel=intel if intel is not None else [],
         urgency=Urgency(None, None, None, None, "UNKNOWN"),
         signal="",
     )
 
 
-def test_attach_monto_sums_bands():
+def test_verify_sums_monto_bands():
     tender = _bare_tender()
     client = _FakeClient([
         {"monto_minimo": 100.0, "monto_maximo": 200.0},
         {"monto_minimo": None, "monto_maximo": 50.0},
     ])
-    intelligence.attach_monto([tender], client)
+    intelligence.verify_and_enrich([tender], client)
     assert tender.monto_min == 100.0
     assert tender.monto_max == 250.0
     assert tender.line_partidas == 2
 
 
-def test_attach_monto_all_null_stays_none():
+def test_verify_monto_all_null_stays_none():
     tender = _bare_tender()
     client = _FakeClient([{"monto_minimo": None, "monto_maximo": None}])
-    intelligence.attach_monto([tender], client)
+    intelligence.verify_and_enrich([tender], client)
     assert tender.monto_min is None
     assert tender.monto_max is None
     assert tender.line_partidas == 1
+
+
+def test_verify_keeps_intel_when_partida_present():
+    tender = _bare_tender(intel=[_intel("25401")], matched=["25401"])
+    client = _FakeClient([{"clave_p_especifica": "25401", "monto_minimo": None, "monto_maximo": None}])
+    intelligence.verify_and_enrich([tender], client)
+    assert [b.partida for b in tender.intel] == ["25401"]
+    assert tender.signal.startswith("STRONG")
+
+
+def test_verify_flags_unverified_when_partida_absent():
+    # Filter matched 25401, but the real line items are kitchen articles (22104).
+    tender = _bare_tender(intel=[_intel("25401")], matched=["25401"])
+    client = _FakeClient([{"clave_p_especifica": "22104", "monto_minimo": None, "monto_maximo": None}])
+    intelligence.verify_and_enrich([tender], client)
+    assert tender.intel == []
+    assert tender.primary_intel is None
+    assert tender.signal.startswith("UNVERIFIED MATCH")
+
+
+def test_verify_filters_to_only_real_partidas():
+    tender = _bare_tender(
+        intel=[_intel("25401", contract_count=40), _intel("25501", contract_count=10)],
+        matched=["25401", "25501"],
+    )
+    client = _FakeClient([{"clave_p_especifica": "25501"}])
+    intelligence.verify_and_enrich([tender], client)
+    assert [b.partida for b in tender.intel] == ["25501"]
+    assert tender.matched_partidas == ["25501"]
+
+
+def test_primary_intel_favors_partida_with_more_line_items():
+    # 25401 has far more national history, but the tender is dominated by 21101
+    # line items, so 21101 should be the headline category.
+    tender = _bare_tender(
+        intel=[_intel("25401", contract_count=30000), _intel("21101", contract_count=2000)],
+        matched=["25401", "21101"],
+    )
+    client = _FakeClient([
+        {"clave_p_especifica": "21101"},
+        {"clave_p_especifica": "21101"},
+        {"clave_p_especifica": "21101"},
+        {"clave_p_especifica": "25401"},
+    ])
+    intelligence.verify_and_enrich([tender], client)
+    assert tender.line_item_counts == {"25401": 1, "21101": 3}
+    assert tender.primary_intel.partida == "21101"
 
 
 # ---- signal -----------------------------------------------------------------

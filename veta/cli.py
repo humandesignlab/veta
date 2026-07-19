@@ -2,7 +2,6 @@
 
 Commands:
     python run.py                      annotated shortlist with intelligence
-    python run.py --with-monto         shortlist plus each tender's est. value
     python run.py --brief LA-...       full bid brief for one tender
     python run.py --brief LA-... --download reports/anexos   brief + attachments
     python run.py --raw                unfiltered pull (all active tenders)
@@ -38,11 +37,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--download", metavar="DIR", help="with --brief, download attachments to DIR")
     parser.add_argument("--scan", action="store_true", help="adjacent opportunity scanner")
     parser.add_argument("--calendar", action="store_true", help="procurement calendar (typical months)")
-    parser.add_argument(
-        "--with-monto",
-        action="store_true",
-        help="also fetch each shortlisted tender's estimated value (slower)",
-    )
     parser.add_argument("--limit", type=int, default=None, help="cap the number of rows shown")
     return parser
 
@@ -144,24 +138,20 @@ def _cmd_shortlist(
     buyer: str | None,
     output: str | None,
     limit: int | None,
-    with_monto: bool = False,
 ) -> None:
-    from veta import api, intelligence, output as out
+    from veta import intelligence, output as out
 
     # Fail fast before the multi-minute fetch if the XLSX target is unwritable.
     if output:
         out.check_xlsx_writable(output)
 
-    shortlist = intelligence.enrich_live()
+    # Every tender is verified against its real line items and annotated with
+    # its estimated value during enrichment (progress prints to stderr).
+    shortlist = intelligence.enrich_live(progress=True)
     if buyer:
         shortlist = [t for t in shortlist if t.siglas.upper() == buyer.upper()]
     if limit is not None:
         shortlist = shortlist[:limit]
-    # Fetch estimated values only for the tenders that survive the filters, so
-    # the extra one-request-per-tender cost scales with what is shown.
-    if with_monto and shortlist:
-        with api.ComprasMXClient() as client:
-            intelligence.attach_monto(shortlist, client)
     print(out.render_console(shortlist))
     if output:
         out.write_xlsx(shortlist, output)
@@ -185,5 +175,5 @@ def main(argv: list[str] | None = None) -> int:
     elif args.raw:
         _cmd_raw(args.buyer, args.output)
     else:
-        _cmd_shortlist(args.buyer, args.output, args.limit, args.with_monto)
+        _cmd_shortlist(args.buyer, args.output, args.limit)
     return 0
