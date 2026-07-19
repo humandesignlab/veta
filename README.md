@@ -43,6 +43,12 @@ python run.py --build
 ```
 
 Every other command reads the cached lookup, so it is fast after this step.
+Each run also prints a one-line freshness nudge so you know when the cache is
+getting stale, for example:
+
+```
+Historical cache: built 2026-07-19, latest contract 2025-12-01 (230 days old)
+```
 
 ### 2. Run your daily shortlist
 

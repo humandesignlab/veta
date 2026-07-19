@@ -166,3 +166,31 @@ def test_lookup_price_band_ignores_non_mxn_and_zero():
     assert r["price_p90"] == 100.0
     # But all three still count toward contract_count.
     assert r["contract_count"] == 3
+
+
+def test_latest_contract_date_uses_most_recent_of_either_date():
+    df = pd.DataFrame({
+        "fecha_fallo": pd.to_datetime(["2025-01-15", None]),
+        "fecha_publicacion": pd.to_datetime(["2024-12-01", "2025-06-20"]),
+    })
+    assert history._latest_contract_date(df) == __import__("datetime").date(2025, 6, 20)
+
+
+def test_cache_status_line_none_when_no_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(history, "LOOKUP_PARQUET", tmp_path / "missing.parquet")
+    assert history.cache_status_line() is None
+
+
+def test_cache_status_line_from_meta(tmp_path, monkeypatch):
+    import datetime
+
+    lookup = tmp_path / "buyer_partida.parquet"
+    lookup.write_bytes(b"x")
+    meta = tmp_path / "cache_meta.json"
+    latest = (datetime.date.today() - datetime.timedelta(days=21)).isoformat()
+    meta.write_text(json.dumps({"built": "2026-07-19", "latest_contract": latest}))
+    monkeypatch.setattr(history, "LOOKUP_PARQUET", lookup)
+    monkeypatch.setattr(history, "CACHE_META", meta)
+
+    line = history.cache_status_line()
+    assert line == f"Historical cache: built 2026-07-19, latest contract {latest} (21 days old)"

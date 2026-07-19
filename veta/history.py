@@ -15,6 +15,7 @@ Public API:
   - build_buyer_partida_lookup(df) -> aggregated DataFrame
   - build(force_download) -> aggregated DataFrame (also writes parquet caches)
   - load_lookup() -> aggregated DataFrame (from parquet cache)
+  - cache_status_line() -> one-line cache freshness summary (or None)
 
 Aggregation columns per buyer + partida:
   contract_count, distinct_suppliers, new_entrant_rate, price_min,
@@ -26,6 +27,7 @@ Gate: lookup loads in under 2 seconds, covers at least 50,000 contracts.
 
 from __future__ import annotations
 
+import datetime
 import json
 import time
 from pathlib import Path
@@ -53,6 +55,7 @@ DATA_DIR = Path("data/contratos")
 AGG_DIR = Path("data/aggregated")
 CONTRACTS_PARQUET = AGG_DIR / "contracts.parquet"
 LOOKUP_PARQUET = AGG_DIR / "buyer_partida.parquet"
+CACHE_META = AGG_DIR / "cache_meta.json"
 
 # Only federal (APF) LAASSP contracts are in scope for Veta.
 ORDEN_GOBIERNO_FEDERAL = "APF"
@@ -298,7 +301,68 @@ def build(force_download: bool = False) -> pd.DataFrame:
 
     lookup = build_buyer_partida_lookup(contracts)
     lookup.to_parquet(LOOKUP_PARQUET, index=False)
+
+    _write_cache_meta(contracts)
     return lookup
+
+
+def _latest_contract_date(contracts: pd.DataFrame) -> datetime.date | None:
+    """Most recent contract date in the cache (award date, else publication)."""
+    dates = pd.concat([contracts["fecha_fallo"], contracts["fecha_publicacion"]])
+    latest = dates.max()
+    return latest.date() if pd.notna(latest) else None
+
+
+def _write_cache_meta(contracts: pd.DataFrame) -> None:
+    """Record when the cache was built and the newest contract it contains."""
+    latest = _latest_contract_date(contracts)
+    meta = {
+        "built": datetime.date.today().isoformat(),
+        "latest_contract": latest.isoformat() if latest else None,
+    }
+    CACHE_META.write_text(json.dumps(meta), encoding="utf-8")
+
+
+def cache_status_line() -> str | None:
+    """One-line freshness summary for the historical cache, or None if absent.
+
+    Example: "Historical cache: built 2026-07-19, latest contract 2026-06-28
+    (21 days old)". Falls back to the parquet mtime and a lightweight date-only
+    read of the contracts cache when the metadata sidecar predates this feature.
+    """
+    if not LOOKUP_PARQUET.exists():
+        return None
+
+    built: str | None = None
+    latest: str | None = None
+    if CACHE_META.exists():
+        try:
+            meta = json.loads(CACHE_META.read_text(encoding="utf-8"))
+            built = meta.get("built")
+            latest = meta.get("latest_contract")
+        except (ValueError, OSError):
+            pass
+
+    if built is None:
+        mtime = datetime.date.fromtimestamp(LOOKUP_PARQUET.stat().st_mtime)
+        built = mtime.isoformat()
+    if latest is None and CONTRACTS_PARQUET.exists():
+        try:
+            cols = pd.read_parquet(
+                CONTRACTS_PARQUET, columns=["fecha_fallo", "fecha_publicacion"]
+            )
+            d = _latest_contract_date(cols)
+            latest = d.isoformat() if d else None
+        except (OSError, KeyError, ValueError):
+            pass
+
+    line = f"Historical cache: built {built}"
+    if latest:
+        age = (datetime.date.today() - datetime.date.fromisoformat(latest)).days
+        line += f", latest contract {latest} ({age} days old)"
+    else:
+        line += ", latest contract unknown"
+    return line
 
 
 def load_lookup() -> pd.DataFrame:

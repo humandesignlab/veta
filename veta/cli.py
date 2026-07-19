@@ -174,7 +174,17 @@ def _cmd_shortlist(
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point. Returns a process exit code."""
+    import sys
+
     args = build_parser().parse_args(argv)
+
+    # Freshness nudge for every cache-backed run (build is about to refresh it).
+    if not args.build:
+        from veta import history
+
+        status = history.cache_status_line()
+        if status:
+            print(status, file=sys.stderr)
 
     if args.build:
         _cmd_build()

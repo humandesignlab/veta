@@ -99,7 +99,7 @@ veta/scanner.py       Adjacent opportunity scanner
 veta/output.py        Console cards, client XLSX report, raw XLSX export
 veta/cli.py           CLI argument parsing
 data/contratos/       Raw downloaded CSVs (gitignored)
-data/aggregated/      Precomputed lookups (gitignored)
+data/aggregated/      Precomputed lookups + cache_meta.json (gitignored)
 catalogs/             Saved catalog JSONs (gitignored)
 reports/              Generated shortlist files (gitignored)
 ```
@@ -156,3 +156,85 @@ reports/              Generated shortlist files (gitignored)
   to Spanish (FUERTE / MODERADA / DEBIL / SIN HISTORIAL / SIN VERIFICAR). The old
   English single-sheet export is still available as `write_raw_xlsx`
   (`--raw-output`).
+
+- Cache freshness nudge: `build` writes `data/aggregated/cache_meta.json`
+  (`built` date + `latest_contract` date). Every non-build run prints
+  `history.cache_status_line()` to stderr, e.g. "Historical cache: built
+  2026-07-19, latest contract 2025-12-01 (230 days old)". If the metadata
+  sidecar is missing (cache built before this feature) it falls back to the
+  parquet mtime and a two-column read of the contracts cache. The historical
+  CSVs update ~daily with retroactive edits, but the aggregates are slow-moving,
+  so a monthly rebuild (and adding the new year to CONTRATOS_YEARS each January)
+  is enough.
+
+## Fallback: if the Whitney API breaks
+
+The live tender feed depends on the ComprasMX Whitney API at
+upcp-cnetservicios.buengobierno.gob.mx. This API already hardened once
+(added RSA request signing after the spec was written). If it hardens
+again or goes offline, here are the fallback paths in order of preference.
+
+The intelligence layer (intelligence.py, history.py, sourcing.py, scanner.py)
+does not depend on the API. It takes dicts and DataFrames. Only api.py and
+auth.py touch the live endpoint. Any fallback only needs to produce the same
+list[dict] that api.fetch_expedientes returns.
+
+### Fallback 1: OCDS API (datos.gob.mx)
+
+Endpoint: https://api.datos.gob.mx/v2/contratacionesabiertas
+Format: JSON, Open Contracting Data Standard (EDCA)
+Auth: none (public datos.gob.mx infrastructure, separate team)
+Coverage: federal procurement 2017 to present
+Docs: https://www.transparenciapresupuestaria.gob.mx/work/models/PTP/programas/OpenDataDay/Resultados/Guia%20_uso_API_contrataciones%20_abiertas.pdf
+
+Identified during Phase 0 recon but not used because Whitney was cleaner.
+Supports pagination (pageSize, page), entity name filtering, and returns
+tender status, dates, and classification. Test first: confirm it still
+returns current 2026 data and that the CUCOP/partida classification field
+is populated.
+
+To implement: write a new data source module (e.g. veta/ocds.py) that
+queries this API and normalizes the response into the same record format
+intelligence.py expects. Swap api.py calls in cli.py.
+
+### Fallback 2: Expedientes bulk CSV
+
+URL pattern:
+https://upcp-compranet.buengobierno.gob.mx/cnetassets/datos_abiertos_contratos_expedientes/Expedientes_PICompraNet{YEAR}.csv
+
+The 2025 file exists and contains active-system data with partida codes
+and ComprasMX detail URLs. A 2026 file may appear during the year. These
+CSVs include a status field and publication/opening dates, so filtering
+for open tenders is possible.
+
+Trade-off: not real-time. The file updates periodically (nominally daily
+per the metadata, but in practice weekly or irregular). The shortlist
+would be days stale instead of live. The intelligence layer still works
+identically; only freshness degrades.
+
+To implement: extend history.py to also ingest Expedientes CSVs, filter
+for status = VIGENTE and fecha_apertura > today, and feed the results
+into intelligence.build_shortlist.
+
+### Fallback 3: Browser automation
+
+Use Playwright or Claude-in-Chrome to navigate
+comprasmx.buengobierno.gob.mx/sitiopublico/#/, apply filters, and scrape
+the rendered table. The portal always works for human users; automation
+just needs to look human enough.
+
+Trade-off: fragile (breaks on any DOM change), slow (page rendering +
+rate limits), and harder to maintain. Last resort only.
+
+### What to do when the API returns 401
+
+1. Check if the RSA public key rotated: open the SPA source in DevTools,
+   search for the key in the app config or environment, compare with
+   PUBLIC_KEY_PEM in auth.py. If different, update and retry.
+2. Check if the payload format changed: compare the SPA's request headers
+   in DevTools Network tab against what auth.py generates. Look for new
+   fields, changed action names, or a reCAPTCHA token requirement.
+3. Check if the clock endpoint moved: the signing requires server time
+   from /adele/interoperabilidad/tp/reloj. If that 404s, the clock sync
+   breaks and every signature is invalid.
+4. If none of the above: try Fallback 1 (OCDS API) while debugging.
