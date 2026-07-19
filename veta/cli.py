@@ -148,6 +148,10 @@ def _cmd_shortlist(
 ) -> None:
     from veta import api, intelligence, output as out
 
+    # Fail fast before the multi-minute fetch if the XLSX target is unwritable.
+    if output:
+        out.check_xlsx_writable(output)
+
     shortlist = intelligence.enrich_live()
     if buyer:
         shortlist = [t for t in shortlist if t.siglas.upper() == buyer.upper()]

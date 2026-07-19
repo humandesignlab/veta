@@ -169,8 +169,31 @@ def to_dataframe(shortlist: list[EnrichedTender]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def check_xlsx_writable(path: str) -> None:
+    """Raise a clear error if an XLSX cannot be written to path.
+
+    Checks that openpyxl is importable in the active environment and that the
+    parent directory exists. Meant to be called before a long fetch so a
+    misconfigured run fails fast instead of after minutes of work.
+    """
+    import os
+
+    try:
+        import openpyxl  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError(
+            "openpyxl is required to write XLSX files but is not installed in "
+            "the active Python environment. Activate the project venv "
+            "(source .venv/bin/activate) or run pip install -r requirements.txt."
+        ) from exc
+    parent = os.path.dirname(os.path.abspath(path))
+    if not os.path.isdir(parent):
+        raise RuntimeError(f"output directory does not exist: {parent}")
+
+
 def write_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
     """Write the shortlist to an XLSX file. Returns the path."""
+    check_xlsx_writable(path)
     frame = to_dataframe(shortlist)
     frame.to_excel(path, index=False, engine="openpyxl", sheet_name="shortlist")
     return path
