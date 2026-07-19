@@ -19,9 +19,9 @@ def _lookup_row(siglas="IMSS", partida="25401", **overrides):
         "contract_count": 40,
         "distinct_suppliers": 12,
         "new_entrant_rate": 0.35,
-        "price_min": 100.0,
+        "price_p10": 100.0,
         "price_median": 500.0,
-        "price_max": 9000.0,
+        "price_p90": 9000.0,
         "years_active": [2023, 2024, 2025],
         "is_recurring": True,
         "typical_month": 9,
@@ -82,10 +82,17 @@ def test_urgency_unknown_without_deadline():
     assert _urgency(None).level == "UNKNOWN"
 
 
-def test_urgency_red_when_aclaraciones_passed():
-    # Deadline is 10 days out (would be GREEN) but clarifications already closed.
+def test_urgency_amber_when_aclaraciones_passed_far_deadline():
+    # Deadline is 10 days out (would be GREEN) but clarifications already
+    # closed: this is a risk signal, so it bumps to AMBER, not RED.
     u = _urgency("2026-01-20T09:00:00", aclaraciones_iso="2026-01-05T09:00:00")
     assert u.aclaraciones_passed is True
+    assert u.level == "AMBER"
+
+
+def test_urgency_red_beats_aclaraciones_amber():
+    # A deadline within 3 days stays RED even though aclaraciones also passed.
+    u = _urgency("2026-01-12T09:00:00", aclaraciones_iso="2026-01-05T09:00:00")
     assert u.level == "RED"
 
 
@@ -183,22 +190,41 @@ def test_attach_monto_all_null_stays_none():
 
 # ---- signal -----------------------------------------------------------------
 
-def test_signal_strong_for_open_recurring():
+def test_signal_strong_for_open_recurring_valuable():
     intel = BuyerIntel(
         siglas="IMSS", partida="25401", partida_desc="med",
         has_history=True, contract_count=40, distinct_suppliers=12,
-        new_entrant_rate=0.35, is_recurring=True,
+        new_entrant_rate=0.35, is_recurring=True, price_median=500_000.0,
     )
     assert intelligence._signal(intel).startswith("STRONG")
 
 
-def test_signal_moderate_for_closed_buyer():
+def test_signal_moderate_when_median_below_threshold():
+    # Open and recurring but low-value: not STRONG.
     intel = BuyerIntel(
         siglas="IMSS", partida="25401", partida_desc="med",
         has_history=True, contract_count=40, distinct_suppliers=12,
-        new_entrant_rate=0.05, is_recurring=True,
+        new_entrant_rate=0.35, is_recurring=True, price_median=1_000.0,
     )
     assert intelligence._signal(intel).startswith("MODERATE")
+
+
+def test_signal_moderate_for_closed_recurring_buyer():
+    intel = BuyerIntel(
+        siglas="IMSS", partida="25401", partida_desc="med",
+        has_history=True, contract_count=40, distinct_suppliers=12,
+        new_entrant_rate=0.05, is_recurring=True, price_median=500_000.0,
+    )
+    assert intelligence._signal(intel).startswith("MODERATE")
+
+
+def test_signal_weak_when_neither_open_nor_recurring():
+    intel = BuyerIntel(
+        siglas="IMSS", partida="25401", partida_desc="med",
+        has_history=True, contract_count=3, distinct_suppliers=2,
+        new_entrant_rate=0.05, is_recurring=False, price_median=500_000.0,
+    )
+    assert intelligence._signal(intel).startswith("WEAK")
 
 
 def test_signal_no_history():

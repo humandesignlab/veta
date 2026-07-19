@@ -33,6 +33,12 @@ from pathlib import Path
 import httpx
 import pandas as pd
 
+from veta import filters
+
+# Captured categories (for example pharma 25301) that must never contribute to
+# the intelligence of any partida. Sourced from the distributor profile.
+EXCLUDE_CLAVES = {clave for _pid, clave, _desc in filters.EXCLUDE_PARTIDAS}
+
 # Confirmed live host (verified 2026-07-18). The spec section 3.2 host
 # funcionpublica.gob.mx is dead; use buengobierno.gob.mx instead.
 CONTRATOS_URL_TEMPLATE = (
@@ -137,6 +143,12 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
     partida so they join correctly against single-clave live tenders. As a
     result a bundled contract is counted once per partida it includes, and its
     amount contributes to the price band of each of those partidas.
+
+    Any contract that bundles a captured category (EXCLUDE_CLAVES, for example
+    pharma 25301) is dropped entirely before exploding. Otherwise the pharma
+    winner and amount would leak into the non-pharma partida it was bundled
+    with (for example showing AstraZeneca and a $6.7B contract under 25401
+    medical supplies), which destroys trust in the non-pharma intelligence.
     """
     df = df[
         (df["orden_gobierno"] == ORDEN_GOBIERNO_FEDERAL)
@@ -147,8 +159,17 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
         df[col] = df[col].astype("string").str.strip()
     df["rfc"] = df["rfc"].str.upper()
 
-    # Explode multi-partida rows into one row per partida clave.
+    # Split bundled partidas, then drop any contract touching an excluded
+    # (captured) category so it cannot contaminate a non-excluded partida.
     df["partida"] = df["partida"].str.split(",")
+
+    def _touches_excluded(claves: object) -> bool:
+        if not isinstance(claves, list):
+            return False
+        return any((c or "").strip() in EXCLUDE_CLAVES for c in claves)
+
+    df = df[~df["partida"].apply(_touches_excluded)]
+
     df = df.explode("partida")
     df["partida"] = df["partida"].str.strip()
 
@@ -199,11 +220,18 @@ def build_buyer_partida_lookup(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
-    # Price band on MXN contracts with a positive amount only.
+    # Price band on MXN contracts with a positive amount only. P10 and P90
+    # percentiles are used instead of min/max so a single tiny purchase order
+    # or a massive consolidated contract does not blow the band out to nine
+    # orders of magnitude.
     mxn = df[(df["moneda"] == CURRENCY_MXN) & (df["importe"] > 0)]
     price = (
         mxn.groupby(key)["importe"]
-        .agg(price_min="min", price_median="median", price_max="max")
+        .agg(
+            price_p10=lambda s: s.quantile(0.10),
+            price_median="median",
+            price_p90=lambda s: s.quantile(0.90),
+        )
         .reset_index()
     )
 

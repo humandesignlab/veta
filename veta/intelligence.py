@@ -31,6 +31,10 @@ URGENCY_AMBER_DAYS = 7
 # Openness threshold: a new-entrant rate at or above this reads as an open buyer.
 OPEN_BUYER_RATE = 0.30
 
+# A STRONG signal additionally requires a median contract worth pursuing, so
+# open+recurring categories of trivial value do not all read as STRONG.
+STRONG_MEDIAN_THRESHOLD = 200_000
+
 
 @dataclass
 class BuyerIntel:
@@ -43,9 +47,9 @@ class BuyerIntel:
     contract_count: int = 0
     distinct_suppliers: int = 0
     new_entrant_rate: float | None = None
-    price_min: float | None = None
+    price_p10: float | None = None
     price_median: float | None = None
-    price_max: float | None = None
+    price_p90: float | None = None
     years_active: list[int] = field(default_factory=list)
     is_recurring: bool = False
     typical_month: int | None = None
@@ -145,9 +149,9 @@ def _build_intel(
         contract_count=int(row.get("contract_count", 0) or 0),
         distinct_suppliers=int(row.get("distinct_suppliers", 0) or 0),
         new_entrant_rate=_as_float(row.get("new_entrant_rate")),
-        price_min=_as_float(row.get("price_min")),
+        price_p10=_as_float(row.get("price_p10")),
         price_median=_as_float(row.get("price_median")),
-        price_max=_as_float(row.get("price_max")),
+        price_p90=_as_float(row.get("price_p90")),
         years_active=years_list,
         is_recurring=bool(row.get("is_recurring", False)),
         typical_month=int(tm) if tm is not None and not pd.isna(tm) else None,
@@ -170,13 +174,13 @@ def _compute_urgency(record: dict[str, Any], now: datetime.datetime) -> Urgency:
     days = (deadline.date() - now.date()).days if deadline else None
     acl_passed = aclaraciones < now if aclaraciones else None
 
+    # A passed clarifications window is a risk signal, not a disqualifier: it
+    # bumps GREEN down to AMBER rather than forcing RED.
     if days is None:
         level = "UNKNOWN"
-    elif days < 0:
+    elif days <= URGENCY_RED_DAYS:      # includes already-passed deadlines
         level = "RED"
-    elif days <= URGENCY_RED_DAYS or acl_passed:
-        level = "RED"
-    elif days <= URGENCY_AMBER_DAYS:
+    elif days <= URGENCY_AMBER_DAYS or acl_passed:
         level = "AMBER"
     else:
         level = "GREEN"
@@ -184,7 +188,12 @@ def _compute_urgency(record: dict[str, Any], now: datetime.datetime) -> Urgency:
 
 
 def _signal(intel: BuyerIntel | None) -> str:
-    """Plain-language signal derived from the primary buyer intelligence."""
+    """Plain-language signal derived from the primary buyer intelligence.
+
+    STRONG   open buyer AND recurring AND median contract >= threshold
+    MODERATE open buyer OR recurring (but not all STRONG criteria)
+    WEAK     neither open nor recurring
+    """
     if intel is None or not intel.has_history:
         return "NO HISTORY: buyer or category not seen in 2023-2025 federal data"
     parts: list[str] = []
@@ -196,8 +205,16 @@ def _signal(intel: BuyerIntel | None) -> str:
     parts.append("recurring" if intel.is_recurring else "irregular")
     parts.append(f"{intel.distinct_suppliers} historical suppliers")
 
-    strong = intel.is_open_buyer and intel.is_recurring
-    grade = "STRONG" if strong else "MODERATE"
+    median_ok = (
+        intel.price_median is not None
+        and intel.price_median >= STRONG_MEDIAN_THRESHOLD
+    )
+    if intel.is_open_buyer and intel.is_recurring and median_ok:
+        grade = "STRONG"
+    elif intel.is_open_buyer or intel.is_recurring:
+        grade = "MODERATE"
+    else:
+        grade = "WEAK"
     return f"{grade}: " + ", ".join(parts)
 
 

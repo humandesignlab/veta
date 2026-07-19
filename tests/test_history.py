@@ -47,9 +47,10 @@ def test_normalize_filters_non_federal_and_non_laassp():
 
 
 def test_normalize_explodes_multi_partida():
-    df = pd.DataFrame([_raw_row(partida="25301, 25401 ,25501")])
+    # Non-pharma bundle: all claves survive the explode (25301 would be dropped).
+    df = pd.DataFrame([_raw_row(partida="21101, 25401 ,25501")])
     out = history._normalize(df)
-    assert sorted(out["partida"].tolist()) == ["25301", "25401", "25501"]
+    assert sorted(out["partida"].tolist()) == ["21101", "25401", "25501"]
 
 
 def test_normalize_cleans_keys():
@@ -61,6 +62,24 @@ def test_normalize_cleans_keys():
 
 def test_normalize_drops_empty_partida():
     df = pd.DataFrame([_raw_row(partida=""), _raw_row(partida="25401")])
+    out = history._normalize(df)
+    assert out["partida"].tolist() == ["25401"]
+
+
+def test_normalize_drops_pharma_bundled_contract():
+    # A contract bundling pharma (25301) with medical supplies (25401) must be
+    # dropped entirely so pharma does not leak into 25401 intelligence.
+    df = pd.DataFrame([
+        _raw_row(partida="25301, 25401", proveedor="PHARMA GIANT"),
+        _raw_row(partida="25401", proveedor="HONEST SUPPLIER"),
+    ])
+    out = history._normalize(df)
+    assert out["proveedor"].tolist() == ["HONEST SUPPLIER"]
+    assert "25301" not in out["partida"].tolist()
+
+
+def test_normalize_drops_pure_pharma_contract():
+    df = pd.DataFrame([_raw_row(partida="25301"), _raw_row(partida="25401")])
     out = history._normalize(df)
     assert out["partida"].tolist() == ["25401"]
 
@@ -93,9 +112,22 @@ def test_lookup_counts_and_price_band():
     r = lookup.iloc[0]
     assert r["contract_count"] == 3
     assert r["distinct_suppliers"] == 3
-    assert r["price_min"] == 100.0
     assert r["price_median"] == 200.0
-    assert r["price_max"] == 300.0
+    # P10/P90 on [100, 200, 300] interpolate to 120 and 280.
+    assert r["price_p10"] == 120.0
+    assert r["price_p90"] == 280.0
+
+
+def test_lookup_price_percentiles_trim_outliers():
+    # One tiny and one huge outlier should not define the band.
+    df = pd.DataFrame(
+        [_norm_row(rfc=f"R{i}", importe=100.0) for i in range(8)]
+        + [_norm_row(rfc="TINY", importe=1.0), _norm_row(rfc="HUGE", importe=1_000_000.0)]
+    )
+    r = history.build_buyer_partida_lookup(df).iloc[0]
+    assert r["price_median"] == 100.0
+    assert r["price_p10"] > 1.0
+    assert r["price_p90"] < 1_000_000.0
 
 
 def test_lookup_new_entrant_rate_and_recurrence():
@@ -131,6 +163,6 @@ def test_lookup_price_band_ignores_non_mxn_and_zero():
     ])
     lookup = history.build_buyer_partida_lookup(df)
     r = lookup.iloc[0]
-    assert r["price_max"] == 100.0
+    assert r["price_p90"] == 100.0
     # But all three still count toward contract_count.
     assert r["contract_count"] == 3

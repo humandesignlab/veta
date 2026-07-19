@@ -118,6 +118,15 @@ reports/              Generated shortlist files (gitignored)
   tagged with the matching partida. This is how `intelligence.py` joins to the
   historical buyer + partida lookup, no detail endpoint required.
 
+- Data quality (history): two rules keep the intelligence honest.
+  (1) Any contract bundling an EXCLUDE clave (pharma 25301) is dropped entirely
+  in `_normalize` before the multi-partida explode, so a captured-market winner
+  and amount cannot leak into a non-pharma partida.
+  (2) The price band uses P10/P90 percentiles (`price_p10` / `price_p90`), not
+  min/max, so outliers do not blow the band out to nine orders of magnitude.
+  The STRONG signal also requires `price_median >= 200,000` MXN, and a passed
+  clarifications window bumps urgency to AMBER rather than RED.
+
 - Tender detail endpoint: earlier 400s were caused by `id_proceso=0`. The SPA
   actually sends `id_proceso=procedimiento` (the route segment). With that,
   `api.fetch_detail(uuid)` and `api.fetch_partidas(uuid)` both return 200.
