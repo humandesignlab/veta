@@ -52,6 +52,13 @@ EXCLUDE_PARTIDAS = [
 INCLUDE_PARTIDA_IDS = [pid for pid, _clave, _desc in INCLUDE_PARTIDAS]
 EXCLUDE_PARTIDA_IDS = [pid for pid, _clave, _desc in EXCLUDE_PARTIDAS]
 
+# The distributor's own RFC, for Layer 2 (distributor-relative positioning).
+# When set, each tender's signal gains a position grade (INCUMBENT/EXPERIENCED/
+# ADJACENT/OUTSIDER) and a win-probability band computed from this RFC's own
+# contract history. When None, positioning is skipped and only the market
+# signal (Layer 1) is shown, keeping client-agnostic commands unchanged.
+CLIENT_RFC: str | None = None
+
 
 # The distributor's default filter profile for the expedientes endpoint.
 DEFAULT_PROFILE = {

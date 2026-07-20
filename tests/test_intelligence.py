@@ -149,11 +149,13 @@ class _FakeClient:
         return self._partidas
 
 
-def _intel(partida="25401", contract_count=40):
+def _intel(partida="25401", contract_count=40, base_grade="STRONG", confidence="high"):
     return BuyerIntel(
         siglas="IMSS", partida=partida, partida_desc="desc",
         has_history=True, contract_count=contract_count, distinct_suppliers=12,
         new_entrant_rate=0.35, is_recurring=True, price_median=500_000.0,
+        openness_shrunk=0.35, hhi=0.10, value_pctile=0.6,
+        contestability_score=0.8, base_grade=base_grade, confidence=confidence,
     )
 
 
@@ -243,43 +245,36 @@ def test_primary_intel_favors_partida_with_more_line_items():
     assert tender.primary_intel.partida == "21101"
 
 
-# ---- signal -----------------------------------------------------------------
+# ---- signal (Layer 1 formatter over the precomputed grade) ------------------
 
-def test_signal_strong_for_open_recurring_valuable():
-    intel = BuyerIntel(
+def _graded_intel(base_grade="STRONG", confidence="high", contract_count=40):
+    return BuyerIntel(
         siglas="IMSS", partida="25401", partida_desc="med",
-        has_history=True, contract_count=40, distinct_suppliers=12,
+        has_history=True, contract_count=contract_count, distinct_suppliers=12,
         new_entrant_rate=0.35, is_recurring=True, price_median=500_000.0,
+        openness_shrunk=0.42, hhi=0.08, value_pctile=0.7,
+        contestability_score=0.85, base_grade=base_grade, confidence=confidence,
     )
-    assert intelligence._signal(intel).startswith("STRONG")
 
 
-def test_signal_moderate_when_median_below_threshold():
-    # Open and recurring but low-value: not STRONG.
-    intel = BuyerIntel(
-        siglas="IMSS", partida="25401", partida_desc="med",
-        has_history=True, contract_count=40, distinct_suppliers=12,
-        new_entrant_rate=0.35, is_recurring=True, price_median=1_000.0,
-    )
-    assert intelligence._signal(intel).startswith("MODERATE")
+def test_signal_formats_precomputed_grade_with_stats():
+    intel = _graded_intel(base_grade="STRONG", confidence="high")
+    signal = intelligence._signal(intel)
+    assert signal.startswith("STRONG")
+    assert "openness 42%" in signal
+    assert "HHI 0.08" in signal
+    assert "low confidence" not in signal
 
 
-def test_signal_moderate_for_closed_recurring_buyer():
-    intel = BuyerIntel(
-        siglas="IMSS", partida="25401", partida_desc="med",
-        has_history=True, contract_count=40, distinct_suppliers=12,
-        new_entrant_rate=0.05, is_recurring=True, price_median=500_000.0,
-    )
-    assert intelligence._signal(intel).startswith("MODERATE")
+def test_signal_weak_grade_renders_weak():
+    assert intelligence._signal(_graded_intel(base_grade="WEAK")).startswith("WEAK")
 
 
-def test_signal_weak_when_neither_open_nor_recurring():
-    intel = BuyerIntel(
-        siglas="IMSS", partida="25401", partida_desc="med",
-        has_history=True, contract_count=3, distinct_suppliers=2,
-        new_entrant_rate=0.05, is_recurring=False, price_median=500_000.0,
-    )
-    assert intelligence._signal(intel).startswith("WEAK")
+def test_signal_low_confidence_note():
+    intel = _graded_intel(base_grade="MODERATE", confidence="low", contract_count=4)
+    signal = intelligence._signal(intel)
+    assert signal.startswith("MODERATE")
+    assert "low confidence, n=4" in signal
 
 
 def test_signal_no_history():

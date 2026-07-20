@@ -104,6 +104,24 @@ def _intel_block(intel: BuyerIntel) -> list[str]:
     return lines
 
 
+def _position_block(intel: BuyerIntel) -> list[str]:
+    pos = intel.position
+    if pos is None:
+        return []
+    band = f"{pos.p_win_low:.0%} to {pos.p_win_high:.0%}"
+    lines = [
+        "",
+        f"YOUR POSITION ({pos.position_grade}):",
+        f"  Est. win probability: {band} (estimate, not a prediction)",
+        f"  Prior wins here:      {pos.n_prior_wins}"
+        + (f" (last {pos.last_win_year})" if pos.last_win_year else ""),
+        f"  Share of this buyer:  {pos.share_of_buyer:.0%}",
+        f"  Same partida elsewhere: {pos.n_other_buyers_same_partida} other buyers",
+        f"  Other partidas here:    {pos.n_other_partidas_same_buyer} categories",
+    ]
+    return lines
+
+
 def render_card(tender: EnrichedTender) -> str:
     bar = "=" * CARD_WIDTH
     lines = [
@@ -128,6 +146,7 @@ def render_card(tender: EnrichedTender) -> str:
             if matched and matched * 2 < tender.line_partidas:
                 share += "  [minority line]"
             lines.append(share)
+        lines.extend(_position_block(primary))
     lines.append("")
     lines.append(f"SIGNAL: {tender.signal}")
     lines.append(bar)
@@ -147,6 +166,7 @@ def to_dataframe(shortlist: list[EnrichedTender]) -> pd.DataFrame:
     rows = []
     for t in shortlist:
         p = t.primary_intel
+        pos = p.position if p else None
         rows.append(
             {
                 "numero_procedimiento": t.numero_procedimiento,
@@ -176,6 +196,24 @@ def to_dataframe(shortlist: list[EnrichedTender]) -> pd.DataFrame:
                 "hist_recurring": p.is_recurring if p else None,
                 "hist_typical_month": p.typical_month if p else None,
                 "hist_top_suppliers": json.dumps(p.top_suppliers, ensure_ascii=False) if p else None,
+                "hist_hhi": p.hhi if p else None,
+                "hist_openness_shrunk": p.openness_shrunk if p else None,
+                "hist_value_pctile": p.value_pctile if p else None,
+                "hist_contestability": p.contestability_score if p else None,
+                "hist_confidence": p.confidence if p else None,
+                "hist_grade": p.base_grade if p else None,
+                "pos_grade": pos.position_grade if pos else None,
+                "pos_p_low": pos.p_win_low if pos else None,
+                "pos_p_high": pos.p_win_high if pos else None,
+                "pos_prior_wins": pos.n_prior_wins if pos else None,
+                "pos_last_win_year": pos.last_win_year if pos else None,
+                "pos_share_of_buyer": pos.share_of_buyer if pos else None,
+                "pos_score": pos.position_score if pos else None,
+                "pos_incumbency": pos.incumbency_strength if pos else None,
+                "pos_category": pos.category_strength if pos else None,
+                "pos_relationship": pos.relationship_strength if pos else None,
+                "pos_other_buyers": pos.n_other_buyers_same_partida if pos else None,
+                "pos_other_partidas": pos.n_other_partidas_same_buyer if pos else None,
                 "uuid_procedimiento": t.uuid_procedimiento,
             }
         )
@@ -235,11 +273,11 @@ _SIGNAL_STYLE = {
 
 _RESUMEN_HEADERS = [
     "Accion", "No. Procedimiento", "Institucion", "Estado", "Descripcion",
-    "Categoria", "Fecha Apertura", "Dias Restantes", "Monto Estimado",
+    "Categoria", "Fecha Apertura", "Dias Restantes (cal.)", "Monto Estimado",
     "Banda Historica", "Mediana Hist.", "Tasa Nuevos", "Señal", "Items",
     "Competidores",
 ]
-_RESUMEN_WIDTHS = [12, 32, 10, 16, 50, 40, 12, 8, 18, 24, 16, 8, 14, 10, 50]
+_RESUMEN_WIDTHS = [12, 32, 10, 16, 50, 40, 12, 18, 18, 24, 16, 8, 14, 10, 50]
 
 # (dataframe key, Spanish header) for the Detalle sheet, in column order.
 _DETALLE_COLUMNS = [
@@ -253,7 +291,7 @@ _DETALLE_COLUMNS = [
     ("estatus", "Estatus"),
     ("matched_partidas", "Partidas Coincidentes"),
     ("deadline", "Fecha Apertura"),
-    ("days_to_deadline", "Dias Restantes"),
+    ("days_to_deadline", "Dias Restantes (cal.)"),
     ("aclaraciones_passed", "Aclaraciones Pasadas"),
     ("urgency", "Urgencia"),
     ("est_monto_min", "Monto Minimo Est."),
@@ -269,6 +307,24 @@ _DETALLE_COLUMNS = [
     ("hist_price_p90", "Precio P90"),
     ("hist_recurring", "Recurrente"),
     ("hist_typical_month", "Mes Tipico"),
+    ("hist_hhi", "HHI"),
+    ("hist_openness_shrunk", "Apertura Ajustada"),
+    ("hist_value_pctile", "Percentil Valor"),
+    ("hist_contestability", "Puntaje Mercado"),
+    ("hist_confidence", "Confianza"),
+    ("hist_grade", "Grado Mercado"),
+    ("pos_grade", "Posicion"),
+    ("pos_p_low", "P Min"),
+    ("pos_p_high", "P Max"),
+    ("pos_prior_wins", "Contratos Previos"),
+    ("pos_last_win_year", "Ultimo Año Ganado"),
+    ("pos_share_of_buyer", "Participacion Comprador"),
+    ("pos_score", "Puntaje Posicion"),
+    ("pos_incumbency", "Fuerza Incumbencia"),
+    ("pos_category", "Fuerza Categoria"),
+    ("pos_relationship", "Fuerza Relacion"),
+    ("pos_other_buyers", "Otros Compradores"),
+    ("pos_other_partidas", "Otras Partidas"),
     ("hist_top_suppliers", "Top Proveedores"),
     ("uuid_procedimiento", "UUID"),
 ]
@@ -276,6 +332,16 @@ _DETALLE_COLUMNS = [
 _DETALLE_MONEY = {
     "est_monto_min", "est_monto_max",
     "hist_price_p10", "hist_price_median", "hist_price_p90",
+}
+# Detalle keys shown as percentages (0%).
+_DETALLE_PERCENT = {
+    "hist_new_entrant_rate", "hist_openness_shrunk", "hist_value_pctile",
+    "pos_p_low", "pos_p_high", "pos_share_of_buyer",
+}
+# Detalle keys shown as 2-decimal ratios (0.00).
+_DETALLE_RATIO = {
+    "hist_hhi", "hist_contestability", "pos_score",
+    "pos_incumbency", "pos_category", "pos_relationship",
 }
 
 
@@ -380,13 +446,24 @@ def write_client_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
             cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center")
 
+    # Layer 2 columns appear only when the run is client-specific (CLIENT_RFC).
+    has_position = any(
+        t.primary_intel is not None and t.primary_intel.position is not None
+        for t in ordered
+    )
+    headers = list(_RESUMEN_HEADERS)
+    widths = list(_RESUMEN_WIDTHS)
+    if has_position:
+        headers += ["Posicion", "P Estimada", "Contratos Previos"]
+        widths += [14, 14, 16]
+
     header_row = 6
-    for col, name in enumerate(_RESUMEN_HEADERS, start=1):
+    for col, name in enumerate(headers, start=1):
         cell = ws.cell(row=header_row, column=col, value=name)
         cell.fill = header_fill
         cell.font = header_font
-    for col, width in enumerate(_RESUMEN_WIDTHS, start=1):
-        ws.column_dimensions[chr(64 + col)].width = width
+    for col, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(col)].width = width
 
     red_font = Font(color="CC0000")
     amber_font = Font(color="B45309")
@@ -422,9 +499,24 @@ def write_client_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
             row=row, column=12,
             value=f"{p.new_entrant_rate:.0%}" if (p and p.new_entrant_rate is not None) else "S/D",
         )
-        ws.cell(row=row, column=13, value=senal)
+        # Flag thin-data grades so a low-confidence Señal is visible at a glance.
+        low_conf = bool(p and p.has_history and p.confidence == "low")
+        ws.cell(row=row, column=13, value=senal + (" *" if low_conf else ""))
         ws.cell(row=row, column=14, value=_items_cell(t))
         ws.cell(row=row, column=15, value=_competidores_cell(p))
+
+        if has_position:
+            pos = p.position if p else None
+            if pos is not None:
+                ws.cell(row=row, column=16, value=pos.position_grade)
+                pcell = ws.cell(
+                    row=row, column=17,
+                    value=f"{pos.p_win_low:.0%}-{pos.p_win_high:.0%}",
+                )
+                pcell.alignment = Alignment(horizontal="center")
+                ws.cell(row=row, column=18, value=pos.n_prior_wins)
+            else:
+                ws.cell(row=row, column=16, value="S/D")
 
         # Conditional styling.
         bg, fg, bold = _BUCKET_STYLE[bucket]
@@ -450,8 +542,11 @@ def write_client_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
         row += 1
 
     last = max(row - 1, header_row)
-    ws.auto_filter.ref = f"A{header_row}:O{last}"
+    end_col = get_column_letter(len(headers))
+    ws.auto_filter.ref = f"A{header_row}:{end_col}{last}"
     ws.freeze_panes = "A7"
+    note = ws.cell(row=last + 2, column=1, value="* Señal de baja confianza (pocos datos historicos, n<8)")
+    note.font = Font(italic=True, color="6B7280")
 
     # ---- Sheet 2: Detalle ------------------------------------------------- #
     ws2 = wb.create_sheet("Detalle")
@@ -475,8 +570,10 @@ def write_client_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
             cell = ws2.cell(row=r, column=col, value=value)
             if key in _DETALLE_MONEY and value is not None:
                 cell.number_format = "#,##0"
-            elif key == "hist_new_entrant_rate" and value is not None:
+            elif key in _DETALLE_PERCENT and value is not None:
                 cell.number_format = "0%"
+            elif key in _DETALLE_RATIO and value is not None:
+                cell.number_format = "0.00"
             elif key == "deadline" and value is not None:
                 cell.number_format = "DD/MM/YYYY"
 

@@ -18,9 +18,10 @@ Public API:
   - cache_status_line() -> one-line cache freshness summary (or None)
 
 Aggregation columns per buyer + partida:
-  contract_count, distinct_suppliers, new_entrant_rate, price_min,
-  price_median, price_max, top_suppliers (JSON), years_active, is_recurring,
-  typical_month.
+  contract_count, distinct_suppliers, new_entrant_rate, price_p10,
+  price_median, price_p90, top_suppliers (JSON), years_active, is_recurring,
+  typical_month, hhi, openness_shrunk, value_pctile, contestability_score,
+  confidence, base_grade.
 
 Gate: lookup loads in under 2 seconds, covers at least 50,000 contracts.
 """
@@ -62,6 +63,28 @@ ORDEN_GOBIERNO_FEDERAL = "APF"
 LEY_LAASSP = "LAASSP"
 CURRENCY_MXN = "MXN"
 LICITACION_PUBLICA = "LICITACIÓN PÚBLICA"
+
+# --- Layer 1 signal: market contestability grading (all tunable) ----------- #
+# The contestability score blends shrunk openness, low concentration, and
+# category-relative value. Openness dominates; value is a modifier.
+OPENNESS_WEIGHT = 0.45
+CONCENTRATION_WEIGHT = 0.35
+VALUE_WEIGHT = 0.20
+
+# Reliability gate: a cell needs this much evidence to earn the top grade.
+MIN_CONTRACTS = 8
+MIN_SUPPLIERS = 5
+
+# Empirical-Bayes prior: fit a per-partida Beta(alpha, beta) from the spread of
+# its cells' raw entrant rates. Below this many cells, or on a degenerate
+# variance, fall back to a weak global prior instead.
+MIN_CELLS_FOR_PRIOR = 20
+GLOBAL_PRIOR = (1.0, 2.0)
+
+# Grade cutoffs as quantiles of the contestability score over gate-passing
+# cells, so grades stay meaningfully spread as the data shifts.
+STRONG_QUANTILE = 0.80
+MODERATE_QUANTILE = 0.50
 
 # Raw CSV column name -> normalized (snake_case) name. Only the columns Veta
 # needs are loaded. Note: the header has two "Moneda" columns; pandas keeps the
@@ -221,6 +244,105 @@ def _top_suppliers_json(group: pd.DataFrame, limit: int = 5) -> str:
     return json.dumps(records, ensure_ascii=False)
 
 
+def _fit_beta_prior(rates: pd.Series) -> tuple[float, float]:
+    """Fit a Beta(alpha, beta) prior to a set of proportions by method of moments.
+
+    Used per partida to shrink each cell's raw entrant rate toward the category
+    norm. Falls back to a weak global prior when there are too few cells or the
+    variance is degenerate (all rates equal, or mean at 0/1).
+    """
+    clean = rates.dropna()
+    if len(clean) < MIN_CELLS_FOR_PRIOR:
+        return GLOBAL_PRIOR
+    mean = float(clean.mean())
+    var = float(clean.var(ddof=0))
+    # Near-zero variance (all rates ~equal) is degenerate; the epsilon guards
+    # against floating-point noise producing an absurdly concentrated prior.
+    if var <= 1e-9 or mean <= 0 or mean >= 1:
+        return GLOBAL_PRIOR
+    common = mean * (1 - mean) / var - 1
+    if common <= 0:
+        return GLOBAL_PRIOR
+    alpha = max(mean * common, 1e-3)
+    beta = max((1 - mean) * common, 1e-3)
+    return alpha, beta
+
+
+def _assign_grades(lookup: pd.DataFrame) -> pd.DataFrame:
+    """Add confidence, base_grade columns from the reliability gate + quantiles.
+
+    A cell needs MIN_CONTRACTS contracts and MIN_SUPPLIERS suppliers to be
+    "high" confidence and thus eligible for STRONG. Grade cutoffs are quantiles
+    of the contestability score computed over the gate-passing cells only, so
+    thin cells cannot drag the thresholds around.
+    """
+    lookup = lookup.copy()
+    reliable = (lookup["contract_count"] >= MIN_CONTRACTS) & (
+        lookup["distinct_suppliers"] >= MIN_SUPPLIERS
+    )
+    lookup["confidence"] = reliable.map({True: "high", False: "low"})
+
+    gated = lookup.loc[reliable, "contestability_score"].dropna()
+    if gated.empty:
+        strong_cut = moderate_cut = float("inf")
+    else:
+        strong_cut = float(gated.quantile(STRONG_QUANTILE))
+        moderate_cut = float(gated.quantile(MODERATE_QUANTILE))
+
+    def _grade(row: pd.Series) -> str:
+        score = row["contestability_score"]
+        if score is None or pd.isna(score):
+            return "WEAK"
+        if row["confidence"] == "high" and score >= strong_cut:
+            return "STRONG"
+        if score >= moderate_cut:
+            return "MODERATE"
+        return "WEAK"
+
+    lookup["base_grade"] = lookup.apply(_grade, axis=1)
+    lookup.attrs["strong_cut"] = strong_cut
+    lookup.attrs["moderate_cut"] = moderate_cut
+    return lookup
+
+
+def repeat_win_rate_by_partida(df: pd.DataFrame) -> dict[str, float]:
+    """Per-partida P(win same buyer+partida in year Y+1 | won in year Y).
+
+    Pooled across buyers and consecutive year pairs. This is the incumbent base
+    rate that Layer 2 positioning blends against. With only a 2023-2025 window
+    this rests on two year-pairs, so it is thin; callers fall back to the global
+    rate (key "__global__") for partidas with little data.
+    """
+    winners = df[["siglas", "partida", "rfc", "source_year"]].dropna()
+    winners = winners.drop_duplicates()
+    # Index of (siglas, partida, rfc, year) presence for O(1) "won next year".
+    present = set(
+        zip(
+            winners["siglas"], winners["partida"], winners["rfc"],
+            winners["source_year"].astype(int),
+        )
+    )
+
+    from collections import defaultdict
+
+    hits: dict[str, int] = defaultdict(int)
+    total: dict[str, int] = defaultdict(int)
+    global_hits = global_total = 0
+    for siglas, partida, rfc, year in winners.itertuples(index=False):
+        year = int(year)
+        total[partida] += 1
+        global_total += 1
+        if (siglas, partida, rfc, year + 1) in present:
+            hits[partida] += 1
+            global_hits += 1
+
+    rates: dict[str, float] = {
+        p: hits[p] / total[p] for p in total if total[p] > 0
+    }
+    rates["__global__"] = (global_hits / global_total) if global_total else 0.0
+    return rates
+
+
 def build_buyer_partida_lookup(df: pd.DataFrame) -> pd.DataFrame:
     """Aggregate contracts into a buyer (siglas) + partida lookup table.
 
@@ -273,7 +395,8 @@ def build_buyer_partida_lookup(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index(name="typical_month")
     )
 
-    # New entrant rate.
+    # New entrant rate. Keep the raw counts (k = new_sup, m = distinct_sup) so
+    # the Beta-Binomial shrinkage below can operate on them.
     earliest_year = int(df["source_year"].min())
     first_year = (
         df.groupby(key + ["rfc"])["source_year"].min().reset_index()
@@ -287,9 +410,10 @@ def build_buyer_partida_lookup(df: pd.DataFrame) -> pd.DataFrame:
     entrants["new_entrant_rate"] = (
         entrants["new_sup"] / entrants["distinct_sup"]
     ).round(3)
-    entrants = entrants[key + ["new_entrant_rate"]]
+    entrants = entrants[key + ["distinct_sup", "new_sup", "new_entrant_rate"]]
 
-    # Top suppliers by total MXN value.
+    # Top suppliers by total MXN value, and the HHI concentration of award value
+    # (sum of squared value shares). Low HHI = fragmented/contestable market.
     supplier_totals = (
         mxn.groupby(key + ["rfc", "proveedor"])["importe"]
         .agg(count="size", total="sum")
@@ -301,11 +425,41 @@ def build_buyer_partida_lookup(df: pd.DataFrame) -> pd.DataFrame:
         .apply(_top_suppliers_json)
         .reset_index(name="top_suppliers")
     )
+    hhi = (
+        supplier_totals.groupby(key)["total"]
+        .agg(lambda s: float(((s / s.sum()) ** 2).sum()) if s.sum() > 0 else None)
+        .reset_index(name="hhi")
+    )
 
     lookup = base
-    for part in (price, entrants, years, typical_month, top):
+    for part in (price, entrants, years, typical_month, top, hhi):
         lookup = lookup.merge(part, on=key, how="left")
 
+    # --- Layer 1 contestability score + grade ------------------------------ #
+    # Openness with per-partida empirical-Bayes shrinkage: thin cells collapse
+    # to their category norm, rich cells keep their own rate.
+    lookup["distinct_sup"] = lookup["distinct_sup"].fillna(0)
+    lookup["new_sup"] = lookup["new_sup"].fillna(0)
+    shrunk = []
+    for _partida, grp in lookup.groupby("partida"):
+        alpha, beta = _fit_beta_prior(grp["new_entrant_rate"])
+        s = (grp["new_sup"] + alpha) / (grp["distinct_sup"] + alpha + beta)
+        shrunk.append(s)
+    lookup["openness_shrunk"] = pd.concat(shrunk).round(4)
+
+    # Category-relative value: percentile rank of the median contract within its
+    # partida (neutral 0.5 when the cell has no priced contracts).
+    lookup["value_pctile"] = (
+        lookup.groupby("partida")["price_median"].rank(pct=True).fillna(0.5)
+    )
+
+    lookup["contestability_score"] = (
+        OPENNESS_WEIGHT * lookup["openness_shrunk"]
+        + CONCENTRATION_WEIGHT * (1 - lookup["hhi"].fillna(1.0))
+        + VALUE_WEIGHT * lookup["value_pctile"]
+    ).round(4)
+
+    lookup = _assign_grades(lookup)
     return lookup
 
 
@@ -320,7 +474,8 @@ def build(force_download: bool = False) -> pd.DataFrame:
     lookup = build_buyer_partida_lookup(contracts)
     lookup.to_parquet(LOOKUP_PARQUET, index=False)
 
-    _write_cache_meta(contracts)
+    repeat_rates = repeat_win_rate_by_partida(contracts)
+    _write_cache_meta(contracts, lookup, repeat_rates)
     return lookup
 
 
@@ -331,13 +486,39 @@ def _latest_contract_date(contracts: pd.DataFrame) -> datetime.date | None:
     return latest.date() if pd.notna(latest) else None
 
 
-def _write_cache_meta(contracts: pd.DataFrame) -> None:
-    """Record when the cache was built and the newest contract it contains."""
+def _write_cache_meta(
+    contracts: pd.DataFrame,
+    lookup: pd.DataFrame | None = None,
+    repeat_rates: dict[str, float] | None = None,
+) -> None:
+    """Record cache freshness plus the Layer 1 grading and Layer 2 base rates.
+
+    Beyond the build date and newest contract, this persists the quantile
+    cutoffs and grade distribution (so a grade is auditable) and the per-partida
+    repeat-win rates the positioning layer blends against.
+    """
     latest = _latest_contract_date(contracts)
-    meta = {
+    meta: dict = {
         "built": datetime.date.today().isoformat(),
         "latest_contract": latest.isoformat() if latest else None,
     }
+    if lookup is not None:
+        meta["grading"] = {
+            "strong_cut": lookup.attrs.get("strong_cut"),
+            "moderate_cut": lookup.attrs.get("moderate_cut"),
+            "weights": {
+                "openness": OPENNESS_WEIGHT,
+                "concentration": CONCENTRATION_WEIGHT,
+                "value": VALUE_WEIGHT,
+            },
+            "gate": {"min_contracts": MIN_CONTRACTS, "min_suppliers": MIN_SUPPLIERS},
+            "distribution": {
+                k: int(v)
+                for k, v in lookup["base_grade"].value_counts().items()
+            },
+        }
+    if repeat_rates is not None:
+        meta["repeat_win_rate"] = {k: round(v, 4) for k, v in repeat_rates.items()}
     CACHE_META.write_text(json.dumps(meta), encoding="utf-8")
 
 
@@ -399,6 +580,21 @@ def load_contracts_cache() -> pd.DataFrame:
             f"{CONTRACTS_PARQUET} not found. Run `python -m veta.history` first."
         )
     return pd.read_parquet(CONTRACTS_PARQUET)
+
+
+def load_repeat_win_rate() -> dict[str, float]:
+    """Load per-partida repeat-win rates from cache metadata (may be empty).
+
+    Includes a "__global__" key used as a fallback for partidas with too little
+    data. Returns {} when the metadata predates this feature.
+    """
+    if not CACHE_META.exists():
+        return {}
+    try:
+        meta = json.loads(CACHE_META.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return {}
+    return meta.get("repeat_win_rate", {})
 
 
 def main(force_download: bool = False) -> None:

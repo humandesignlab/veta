@@ -71,12 +71,26 @@ Each tender prints an intelligence card. Read it top to bottom:
 
 - **Urgency (RED / AMBER / GREEN):** RED means the deadline is within 3 days, or
   the clarifications date already passed. Triage on this first.
-- **SIGNAL line:** the headline verdict. `STRONG` means an open buyer in a
-  recurring category. `NO HISTORY` means the buyer and category were not seen in
-  the 2023-2025 data, so you would be bidding blind. `UNVERIFIED MATCH` means the
-  category the listing filtered on does not actually appear in the tender.
-- **New entrant rate / [OPEN BUYER]:** the key number. At or above 30 percent,
-  outsiders actually win here; below that, it tends to be a closed shop.
+- **SIGNAL line:** the headline verdict, in two layers separated by `||`.
+  - *Market grade* (`STRONG` / `MODERATE` / `WEAK`): how contestable this buyer +
+    category is, from a contestability score that blends buyer openness (shrunk
+    toward the category norm so thin data cannot inflate it), supplier
+    concentration (HHI), and category-relative contract value. Grades are set by
+    where a market ranks against all others, and a `*` marks a low-confidence
+    grade (too little history, n < 8). `NO HISTORY` means the buyer and category
+    were not seen in the 2023-2025 data; `UNVERIFIED MATCH` means the category the
+    listing filtered on does not actually appear in the tender.
+  - *Position grade* (`INCUMBENT` / `EXPERIENCED` / `ADJACENT` / `OUTSIDER`) with a
+    win-probability band: how well **your** company is placed to win, based on your
+    own prior wins at this buyer, this category elsewhere, and other categories at
+    this buyer. This half only appears when a client RFC is configured
+    (`filters.CLIENT_RFC`); the probability is an estimate shown as a range, not a
+    prediction. A `STRONG` market you have never sold into and a `WEAK` market
+    where you are the incumbent are very different bids: the two grades together
+    tell you which.
+- **New entrant rate / [OPEN BUYER]:** the raw openness number. At or above 30
+  percent, outsiders actually win here; below that, it tends to be a closed shop.
+  (The grade uses a shrunk version of this to avoid small-sample noise.)
 - **Est. value / Median value:** what the buyer published for this tender (often
   "not published"), and what they have historically paid in the category.
 - **Line items in this category:** how much of the tender is actually your

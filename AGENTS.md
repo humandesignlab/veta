@@ -124,8 +124,7 @@ reports/              Generated shortlist files (gitignored)
   and amount cannot leak into a non-pharma partida.
   (2) The price band uses P10/P90 percentiles (`price_p10` / `price_p90`), not
   min/max, so outliers do not blow the band out to nine orders of magnitude.
-  The STRONG signal also requires `price_median >= 200,000` MXN, and a passed
-  clarifications window bumps urgency to AMBER rather than RED.
+  A passed clarifications window bumps urgency to AMBER rather than RED.
 
 - Tender detail endpoint: earlier 400s were caused by `id_proceso=0`. The SPA
   actually sends `id_proceso=procedimiento` (the route segment). With that,
@@ -144,6 +143,54 @@ reports/              Generated shortlist files (gitignored)
   tenders; progress prints to stderr). Most licitaciones publicas leave the
   amount null (card shows "not published by buyer"); where null, the historical
   price band stays the working-capital proxy.
+
+- Two-layer signal: the `Señal` combines a market grade and a distributor
+  position. They are only useful together and are computed in different places.
+
+  Layer 1 (market contestability) is decided at cache-build time in
+  `history.build_buyer_partida_lookup` and stored on each buyer+partida cell, so
+  a grade reflects the full distribution, not a per-run guess:
+  - `openness_shrunk`: the raw new-entrant rate shrunk toward a per-partida
+    Beta(alpha, beta) prior fit by method of moments (`_fit_beta_prior`). Thin
+    cells collapse to the category norm; rich cells keep their own rate. Prior
+    falls back to `GLOBAL_PRIOR=(1,2)` below `MIN_CELLS_FOR_PRIOR` cells or on
+    degenerate variance.
+  - `hhi`: Herfindahl index of supplier award-value shares (concentration).
+  - `value_pctile`: the cell's median contract percentile within its partida
+    (category-relative, so 200K MXN is not treated the same across categories).
+  - `contestability_score = 0.45*openness_shrunk + 0.35*(1-hhi) + 0.20*value_pctile`.
+  - Reliability gate: a cell needs `>=MIN_CONTRACTS (8)` and
+    `>=MIN_SUPPLIERS (5)` for "high" confidence; low-confidence cells are capped
+    at MODERATE (never STRONG) and flagged with a "*" in the report.
+  - Grade: STRONG/MODERATE/WEAK by the `STRONG_QUANTILE (0.80)` /
+    `MODERATE_QUANTILE (0.50)` cutoffs of the score over gate-passing cells.
+  Cutoffs, weights, gate, and grade distribution are written to
+  `cache_meta.json` for auditability. `intelligence._signal` only formats the
+  precomputed `base_grade`; it no longer decides it.
+
+  Layer 2 (distributor position) is per-client and lives in `positioning.py`.
+  It runs in `enrich_live` only when `filters.CLIENT_RFC` is set (None keeps
+  `--prospects`/`--sourcing` and client-agnostic runs unchanged). It reads the
+  client's own contracts and scores three shrinkage-damped effects: incumbency
+  (same buyer+partida, with recency decay), category transfer (same partida,
+  other buyers), and relationship (same buyer, other partidas). It emits a
+  `position_grade` (INCUMBENT / EXPERIENCED / ADJACENT / OUTSIDER) and a
+  win-probability band that blends the per-partida `repeat_win_rate`
+  (precomputed at build, stored in `cache_meta.json`, global fallback under key
+  `__global__`) with `openness_shrunk`. Position attaches to `primary_intel`
+  only, so the signal stays single-valued per tender. The probability is an
+  ESTIMATE shown as a band, never a point prediction; all Layer 2 constants
+  (`W_*`, `ALPHA_*`, `RECENCY_DECAY`, `P_WIN_CAP`) are judgment defaults pending
+  the backtest calibration below.
+
+  Caveat: `repeat_win_rate` rests on only two consecutive year-pairs in the
+  2023-2025 window, so it is thin; the per-partida value falls back to the
+  global rate for sparse partidas. Do not over-trust the absolute probability.
+
+  Calibration (follow-up, not yet done): backtest by training on 2023-2024 with
+  the label "did the supplier win in 2025" to fit both the Layer 1
+  weights/cutoffs and the Layer 2 weights/alphas against real outcomes instead
+  of judgment. The structure does not change; only the constants get tuned.
 
 - Client report (`--output`): `output.write_client_xlsx` builds a two-sheet,
   Spanish workbook for the commercial director. Sheet "Resumen" is a scannable

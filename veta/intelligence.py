@@ -19,22 +19,22 @@ import datetime
 import json
 import sys
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 from veta import api, filters, history
 
+if TYPE_CHECKING:
+    from veta import positioning
+
 # Urgency thresholds in days to the submission deadline (fecha_apertura).
 URGENCY_RED_DAYS = 3
 URGENCY_AMBER_DAYS = 7
 
-# Openness threshold: a new-entrant rate at or above this reads as an open buyer.
+# Openness display flag: a raw new-entrant rate at or above this reads as an
+# open buyer in the card. Grading itself uses the shrunk openness (Layer 1).
 OPEN_BUYER_RATE = 0.30
-
-# A STRONG signal additionally requires a median contract worth pursuing, so
-# open+recurring categories of trivial value do not all read as STRONG.
-STRONG_MEDIAN_THRESHOLD = 200_000
 
 
 @dataclass
@@ -55,6 +55,15 @@ class BuyerIntel:
     is_recurring: bool = False
     typical_month: int | None = None
     top_suppliers: list[dict[str, Any]] = field(default_factory=list)
+    # Layer 1 market-contestability stats (precomputed at cache-build time).
+    openness_shrunk: float | None = None
+    hhi: float | None = None
+    value_pctile: float | None = None
+    contestability_score: float | None = None
+    base_grade: str = "WEAK"
+    confidence: str = "low"
+    # Layer 2 distributor position (attached only when CLIENT_RFC is set).
+    position: "positioning.ClientPosition | None" = None
 
     @property
     def is_open_buyer(self) -> bool:
@@ -170,6 +179,12 @@ def _build_intel(
         is_recurring=bool(row.get("is_recurring", False)),
         typical_month=int(tm) if tm is not None and not pd.isna(tm) else None,
         top_suppliers=top_list,
+        openness_shrunk=_as_float(row.get("openness_shrunk")),
+        hhi=_as_float(row.get("hhi")),
+        value_pctile=_as_float(row.get("value_pctile")),
+        contestability_score=_as_float(row.get("contestability_score")),
+        base_grade=str(row.get("base_grade") or "WEAK"),
+        confidence=str(row.get("confidence") or "low"),
     )
 
 
@@ -201,35 +216,40 @@ def _compute_urgency(record: dict[str, Any], now: datetime.datetime) -> Urgency:
     return Urgency(deadline, days, aclaraciones, acl_passed, level)
 
 
-def _signal(intel: BuyerIntel | None) -> str:
-    """Plain-language signal derived from the primary buyer intelligence.
+def _market_signal(intel: BuyerIntel) -> str:
+    """Format the Layer 1 market signal from the precomputed grade + stats.
 
-    STRONG   open buyer AND recurring AND median contract >= threshold
-    MODERATE open buyer OR recurring (but not all STRONG criteria)
-    WEAK     neither open nor recurring
+    The grade itself (STRONG/MODERATE/WEAK) is decided at cache-build time by an
+    empirical-Bayes contestability score and a reliability gate; here we only
+    render it with the supporting numbers.
+    """
+    parts: list[str] = []
+    if intel.openness_shrunk is not None:
+        parts.append(f"openness {intel.openness_shrunk:.0%} (adj.)")
+    if intel.hhi is not None:
+        parts.append(f"HHI {intel.hhi:.2f}")
+    parts.append("recurring" if intel.is_recurring else "irregular")
+    parts.append(f"{intel.distinct_suppliers} suppliers")
+    detail = ", ".join(parts)
+    if intel.confidence == "low":
+        detail += f" (low confidence, n={intel.contract_count})"
+    return f"{intel.base_grade}: {detail}"
+
+
+def _signal(intel: BuyerIntel | None) -> str:
+    """Combined signal string: Layer 1 market grade plus Layer 2 position.
+
+    Layer 2 is appended only when a ClientPosition is attached (CLIENT_RFC set);
+    otherwise the market signal shows alone, unchanged for client-agnostic runs.
     """
     if intel is None or not intel.has_history:
         return "NO HISTORY: buyer or category not seen in 2023-2025 federal data"
-    parts: list[str] = []
-    if intel.is_open_buyer:
-        parts.append(f"open buyer ({intel.new_entrant_rate:.0%} new entrants)")
-    else:
-        rate = intel.new_entrant_rate
-        parts.append(f"lower openness ({rate:.0%} new entrants)" if rate is not None else "openness unknown")
-    parts.append("recurring" if intel.is_recurring else "irregular")
-    parts.append(f"{intel.distinct_suppliers} historical suppliers")
+    market = _market_signal(intel)
+    if intel.position is not None:
+        from veta import positioning
 
-    median_ok = (
-        intel.price_median is not None
-        and intel.price_median >= STRONG_MEDIAN_THRESHOLD
-    )
-    if intel.is_open_buyer and intel.is_recurring and median_ok:
-        grade = "STRONG"
-    elif intel.is_open_buyer or intel.is_recurring:
-        grade = "MODERATE"
-    else:
-        grade = "WEAK"
-    return f"{grade}: " + ", ".join(parts)
+        return market + " || " + positioning.format_position(intel.position)
+    return market
 
 
 def signal_grade(signal: str) -> str:
@@ -438,4 +458,14 @@ def enrich_live(
     finally:
         if owns_client:
             client.close()
+
+    # Layer 2: distributor-relative positioning, only when a client RFC is set.
+    if filters.CLIENT_RFC:
+        from veta import positioning
+
+        contracts = history.load_contracts_cache()
+        repeat_rates = history.load_repeat_win_rate()
+        positioning.enrich_with_position(
+            shortlist, filters.CLIENT_RFC, contracts, repeat_rates
+        )
     return shortlist
