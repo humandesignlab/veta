@@ -172,6 +172,23 @@ reports/              Generated shortlist files (gitignored)
   `load_contratos` skips any year whose CSV is absent, so a partial set still
   builds. Add the next year to `CONTRATOS_YEARS` each January.
 
+- Tender statuses (estatus_alterno): the authoritative full set comes from the
+  API status catalog, `client.fetch_catalog("estatus", action="GET_CAT_ESTATUS")`
+  (verified 2026-07-20, 13 values). The API groups them by a `tab` field:
+  tab 0 open/biddable (`VIGENTE`, `EN ACLARACIONES`, `EN ATENCIÓN DE PREGUNTAS`,
+  `EN REPREGUNTAS`), tab 1 in progress/bids closed (`EN APERTURA`,
+  `PENDIENTE DE APERTURA`, `EN EVALUACIÓN`, `EN DECISIÓN DE FALLO`, `SUSPENDIDO`),
+  tab 2 concluded (`ADJUDICADO`, `ADJUDICADO PARCIAL`, `CANCELADO`, `DESIERTO`).
+  These are mirrored in `catalogs.ESTATUS_OPEN / ESTATUS_IN_PROGRESS /
+  ESTATUS_CONCLUDED`. IMPORTANT: `estatus_alterno` is a server-side string
+  filter, so the accents are load-bearing; an unaccented value (for example
+  "EN ATENCION DE PREGUNTAS") matches zero records. The public listing only
+  surfaces tab-0 procedures (concluded ones drop off and live only in the CSVs),
+  so `ESTATUS_OPEN` is the correct universe for the live shortlist. NOTE: the
+  shortlist currently still queries `["VIGENTE"]` only (see intelligence.py
+  `enrich_live` and filters.DEFAULT_PROFILE); widening it to `ESTATUS_OPEN` so
+  clarification-phase tenders are not dropped is the agreed next change.
+
 ## Fallback: if the Whitney API breaks
 
 The live tender feed depends on the ComprasMX Whitney API at

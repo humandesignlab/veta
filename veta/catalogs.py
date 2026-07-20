@@ -35,19 +35,28 @@ CARACTER_INTERNACIONAL_TRATADOS = 2
 CARACTER_INTERNACIONAL_ABIERTO = 3
 
 # 7. estatus (tender status) -> filter: estatus_alterno (string values)
+# Authoritative full set from the API status catalog (GET_CAT_ESTATUS,
+# catalogo="estatus"), verified 2026-07-20. The API groups them by "tab":
+# tab 0 = open (still accepting bids), tab 1 = in progress (bids closed,
+# under evaluation), tab 2 = concluded. These strings are used verbatim in the
+# server-side estatus_alterno filter, so the accents are load-bearing: passing
+# an unaccented value (for example "EN ATENCION DE PREGUNTAS") matches nothing.
+# tab 0: open, still accepting bids. This is the shortlist universe.
 ESTATUS_OPEN = [
     "VIGENTE",
     "EN ACLARACIONES",
-    "EN ATENCION DE PREGUNTAS",
+    "EN ATENCIÓN DE PREGUNTAS",
     "EN REPREGUNTAS",
 ]
+# tab 1: bids closed, procedure under way (no longer biddable).
 ESTATUS_IN_PROGRESS = [
     "EN APERTURA",
-    "EN EVALUACION",
-    "EN DECISION DE FALLO",
     "PENDIENTE DE APERTURA",
+    "EN EVALUACIÓN",
+    "EN DECISIÓN DE FALLO",
     "SUSPENDIDO",
 ]
+# tab 2: concluded.
 ESTATUS_CONCLUDED = [
     "ADJUDICADO",
     "ADJUDICADO PARCIAL",
