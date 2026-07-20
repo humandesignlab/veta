@@ -11,6 +11,7 @@ Commands:
     python run.py --scan               adjacent opportunity scanner
     python run.py --calendar           procurement calendar (typical months)
     python run.py --build              (re)build the historical cache (step 1)
+    python run.py --build --refresh    rebuild AND re-download fresh source CSVs
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Intelligence-annotated shortlist of Mexican federal tenders.",
     )
     parser.add_argument("--build", action="store_true", help="(re)build the historical cache")
+    parser.add_argument("--refresh", action="store_true", help="with --build, re-download the source CSVs (fetch fresh data)")
     parser.add_argument("--raw", action="store_true", help="unfiltered pull of active tenders")
     parser.add_argument("--buyer", metavar="SIGLAS", help="filter shortlist by buyer siglas")
     parser.add_argument(
@@ -45,10 +47,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _cmd_build() -> None:
+def _cmd_build(refresh: bool = False) -> None:
     from veta import history
 
-    history.main()
+    history.main(force_download=refresh)
 
 
 def _cmd_sourcing(clave: str, limit: int | None) -> None:
@@ -178,6 +180,9 @@ def main(argv: list[str] | None = None) -> int:
 
     args = build_parser().parse_args(argv)
 
+    if args.refresh and not args.build:
+        print("--refresh only applies with --build; ignoring it.", file=sys.stderr)
+
     # Freshness nudge for every cache-backed run (build is about to refresh it).
     if not args.build:
         from veta import history
@@ -187,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
             print(status, file=sys.stderr)
 
     if args.build:
-        _cmd_build()
+        _cmd_build(args.refresh)
     elif args.sourcing:
         _cmd_sourcing(args.sourcing, args.limit)
     elif args.brief:

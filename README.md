@@ -35,12 +35,19 @@ and why? Follow these steps in order.
 ### 1. Build the historical cache (once)
 
 Before any intelligence works, build the local lookup. This downloads the
-Contratos CSVs (about 460 MB across 2023-2025) and aggregates them by buyer and
-category. Do this once, then re-run it monthly to refresh:
+Contratos CSVs (one per year, 2023 to the current year) and aggregates them by
+buyer and category. Do this once, then re-run it monthly to refresh:
 
 ```bash
-python run.py --build
+python run.py --build             # aggregate; reuses CSVs already on disk
+python run.py --build --refresh   # re-download fresh CSVs first, then aggregate
 ```
+
+Use `--build` on its own to re-aggregate from the CSVs you already have (fast,
+no download). Use `--build --refresh` to actually pull fresh data from the
+portal, the single clean command when the freshness nudge says the cache is
+getting old. The current-year file may not be published yet early in the year;
+if so it is skipped with a notice and the build proceeds with the years present.
 
 Every other command reads the cached lookup, so it is fast after this step.
 Each run also prints a one-line freshness nudge so you know when the cache is
@@ -99,7 +106,8 @@ python run.py --brief LA-07-...    # full bid brief for one tender (numero or uu
 python run.py --brief LA-07-... --download reports/anexos  # brief + download attachments
 python run.py --scan               # adjacent opportunity scanner
 python run.py --calendar           # procurement calendar (typical months)
-python run.py --build              # (re)build the historical cache
+python run.py --build              # (re)build the historical cache from CSVs on disk
+python run.py --build --refresh    # re-download fresh CSVs, then rebuild
 python run.py --limit 5            # cap rows shown (combine with any command)
 ```
 

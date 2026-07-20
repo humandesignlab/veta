@@ -164,8 +164,13 @@ reports/              Generated shortlist files (gitignored)
   sidecar is missing (cache built before this feature) it falls back to the
   parquet mtime and a two-column read of the contracts cache. The historical
   CSVs update ~daily with retroactive edits, but the aggregates are slow-moving,
-  so a monthly rebuild (and adding the new year to CONTRATOS_YEARS each January)
-  is enough.
+  so a monthly rebuild is enough. `CONTRATOS_YEARS` includes the current year;
+  `--build` re-aggregates from CSVs already on disk (no download), while
+  `--build --refresh` (`history.main(force_download=True)`) re-downloads them
+  first, the single command for genuinely fresh data. `download_contratos`
+  skips a year that 404s (current-year file not published yet) and
+  `load_contratos` skips any year whose CSV is absent, so a partial set still
+  builds. Add the next year to `CONTRATOS_YEARS` each January.
 
 ## Fallback: if the Whitney API breaks
 

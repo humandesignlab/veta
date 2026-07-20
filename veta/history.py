@@ -47,7 +47,7 @@ CONTRATOS_URL_TEMPLATE = (
     "https://upcp-compranet.buengobierno.gob.mx/cnetassets/"
     "datos_abiertos_contratos_expedientes/Contratos_CompraNet{year}.csv"
 )
-CONTRATOS_YEARS = (2023, 2024, 2025)
+CONTRATOS_YEARS = (2023, 2024, 2025, 2026)
 
 CSV_ENCODING = "iso-8859-1"
 
@@ -103,11 +103,19 @@ def download_contratos(
                 paths.append(path)
                 continue
             url = CONTRATOS_URL_TEMPLATE.format(year=year)
-            with client.stream("GET", url) as response:
-                response.raise_for_status()
-                with open(path, "wb") as fh:
-                    for chunk in response.iter_bytes(chunk_size=1 << 20):
-                        fh.write(chunk)
+            try:
+                with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    with open(path, "wb") as fh:
+                        for chunk in response.iter_bytes(chunk_size=1 << 20):
+                            fh.write(chunk)
+            except httpx.HTTPStatusError as exc:
+                # The current-year file may not be published yet; skip it rather
+                # than fail the whole build.
+                if exc.response.status_code == 404:
+                    print(f"  skip {year}: not published yet (404)")
+                    continue
+                raise
             paths.append(path)
     return paths
 
@@ -129,11 +137,21 @@ def load_contratos(
     years: tuple[int, ...] = CONTRATOS_YEARS,
     data_dir: Path = DATA_DIR,
 ) -> pd.DataFrame:
-    """Load and normalize federal LAASSP contracts across the given years."""
-    frames = [
-        _read_year(data_dir / f"Contratos_CompraNet{year}.csv", year)
-        for year in years
-    ]
+    """Load and normalize federal LAASSP contracts across the given years.
+
+    Years whose CSV is not on disk (for example a current year not yet
+    published) are skipped so a partial set of files still builds.
+    """
+    frames = []
+    for year in years:
+        path = data_dir / f"Contratos_CompraNet{year}.csv"
+        if not path.exists():
+            continue
+        frames.append(_read_year(path, year))
+    if not frames:
+        raise FileNotFoundError(
+            f"No Contratos CSVs found in {data_dir}. Run `python run.py --build`."
+        )
     df = pd.concat(frames, ignore_index=True)
     return _normalize(df)
 
@@ -383,10 +401,14 @@ def load_contracts_cache() -> pd.DataFrame:
     return pd.read_parquet(CONTRACTS_PARQUET)
 
 
-def main() -> None:
-    """Build the historical cache and print a summary."""
+def main(force_download: bool = False) -> None:
+    """Build the historical cache and print a summary.
+
+    When force_download is set, the source CSVs are re-fetched even if they are
+    already on disk (the `--build --refresh` path).
+    """
     start = time.perf_counter()
-    lookup = build()
+    lookup = build(force_download=force_download)
     build_secs = time.perf_counter() - start
 
     contracts = load_contracts_cache()
