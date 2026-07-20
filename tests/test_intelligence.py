@@ -331,3 +331,73 @@ def test_bucket_descartar_for_no_history():
 
 def test_bucket_descartar_for_unverified():
     assert intelligence.assign_bucket(_tender_for_bucket("UNVERIFIED MATCH: x", 2)) == "DESCARTAR"
+
+
+# --------------------------------------------------------------------------- #
+# Strategic buckets (Layer 2 active).
+# --------------------------------------------------------------------------- #
+
+
+def _position(grade):
+    from veta.positioning import ClientPosition
+
+    return ClientPosition(
+        position_grade=grade,
+        position_score=0.5,
+        p_win_low=0.2,
+        p_win_high=0.3,
+        n_prior_wins=5 if grade == "INCUMBENT" else 0,
+        last_win_year=2025,
+        share_of_buyer=0.1,
+        n_other_buyers_same_partida=2,
+        n_other_partidas_same_buyer=3,
+        incumbency_strength=0.5,
+        category_strength=0.4,
+        relationship_strength=0.3,
+    )
+
+
+def _positioned_tender(pos_grade, base_grade, days=10):
+    intel = _intel(base_grade=base_grade)
+    intel.position = _position(pos_grade)
+    t = _bare_tender(intel=[intel])
+    t.urgency = Urgency(NOW + datetime.timedelta(days=days), days, None, None, "GREEN")
+    t.signal = intelligence._signal(intel)
+    return t
+
+
+def test_strategic_bucket_experienced_strong_is_oportunidad():
+    t = _positioned_tender("EXPERIENCED", "STRONG")
+    assert intelligence.assign_strategic_bucket(t) == "OPORTUNIDAD"
+
+
+def test_strategic_bucket_adjacent_moderate_is_oportunidad():
+    t = _positioned_tender("ADJACENT", "MODERATE")
+    assert intelligence.assign_strategic_bucket(t) == "OPORTUNIDAD"
+
+
+def test_strategic_bucket_incumbent_is_territorio():
+    t = _positioned_tender("INCUMBENT", "STRONG")
+    assert intelligence.assign_strategic_bucket(t) == "TERRITORIO"
+
+
+def test_strategic_bucket_outsider_strong_is_explorar():
+    t = _positioned_tender("OUTSIDER", "STRONG")
+    assert intelligence.assign_strategic_bucket(t) == "EXPLORAR"
+
+
+def test_strategic_bucket_outsider_weak_is_no_prioritario():
+    t = _positioned_tender("OUTSIDER", "WEAK")
+    assert intelligence.assign_strategic_bucket(t) == "NO PRIORITARIO"
+
+
+def test_strategic_bucket_experienced_weak_is_no_prioritario():
+    # Relevant capability but a weak market does not justify preparation cost.
+    t = _positioned_tender("EXPERIENCED", "WEAK")
+    assert intelligence.assign_strategic_bucket(t) == "NO PRIORITARIO"
+
+
+def test_strategic_bucket_no_position_falls_back_to_urgency():
+    t = _tender_for_bucket("STRONG: x", 2)
+    assert t.primary_intel is None or t.primary_intel.position is None
+    assert intelligence.assign_strategic_bucket(t) == intelligence.assign_bucket(t)

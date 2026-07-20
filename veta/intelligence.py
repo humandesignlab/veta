@@ -288,6 +288,40 @@ def assign_bucket(tender: EnrichedTender) -> str:
     return "MONITOREAR"
 
 
+# Strategic buckets for the client report (Layer 2 active), in sort order.
+# Discovery leads: the client already knows their TERRITORIO, they pay for the
+# blind spots (OPORTUNIDAD/EXPLORAR) Veta reveals.
+STRATEGIC_BUCKETS = ["OPORTUNIDAD", "TERRITORIO", "EXPLORAR", "NO PRIORITARIO"]
+
+
+def assign_strategic_bucket(tender: EnrichedTender) -> str:
+    """Map a tender to a strategic bucket from position + market grade.
+
+    Only meaningful when CLIENT_RFC is set (the primary intel carries a
+    position). Falls back to the urgency bucket when there is no position, so
+    callers can use it uniformly.
+
+    - OPORTUNIDAD: EXPERIENCED/ADJACENT position in a STRONG/MODERATE market
+      (relevant capability, not yet competing here) - the client's blind spots.
+    - TERRITORIO:  INCUMBENT - buyers the client already wins; monitor/defend.
+    - EXPLORAR:    OUTSIDER in a STRONG market - a stretch the data says is viable.
+    - NO PRIORITARIO: everything else (weak market or no relationship or no edge).
+    """
+    intel = tender.primary_intel
+    if intel is None or intel.position is None:
+        return assign_bucket(tender)
+
+    grade = intel.base_grade
+    pos = intel.position.position_grade
+    if pos == "INCUMBENT":
+        return "TERRITORIO"
+    if pos in ("EXPERIENCED", "ADJACENT") and grade in ("STRONG", "MODERATE"):
+        return "OPORTUNIDAD"
+    if pos == "OUTSIDER" and grade == "STRONG":
+        return "EXPLORAR"
+    return "NO PRIORITARIO"
+
+
 def build_shortlist(
     records_by_partida: dict[int, list[dict[str, Any]]],
     lookup: pd.DataFrame,

@@ -136,17 +136,35 @@ is expected, not a hang.
 
 `--output` writes a share-ready, Spanish-language workbook with two sheets:
 
-- **Resumen:** a one-page dashboard. Each tender is placed in an action bucket
-  and the sheet is sorted by bucket, then by deadline:
-  - **ACTUAR** (red): workable signal closing in <= 3 days.
-  - **PREPARAR** (amber): workable signal closing in 4-14 days.
-  - **MONITOREAR** (green): workable signal closing in > 14 days.
-  - **DESCARTAR** (gray): weak, no-history, or unverified match, at any deadline.
+- **Resumen:** a one-page dashboard. Each tender is placed in a bucket and the
+  sheet is sorted by bucket, then by deadline. The bucketing depends on whether
+  a client is configured (see below):
+  - **Without a client RFC (market view), sorted by urgency:**
+    - **ACTUAR** (red): workable signal closing in <= 3 days.
+    - **PREPARAR** (amber): workable signal closing in 4-14 days.
+    - **MONITOREAR** (green): workable signal closing in > 14 days.
+    - **DESCARTAR** (gray): weak, no-history, or unverified match, any deadline.
+  - **With a client RFC set (personalized view), sorted by strategic value:**
+    - **OPORTUNIDAD** (blue): a category you sell elsewhere, or a buyer you
+      already work with, has open tenders here that you are not competing for.
+      These blind spots lead the report - they are what Veta reveals.
+    - **TERRITORIO** (green): buyers where you already win. Monitor and defend.
+    - **EXPLORAR** (amber): a strong, open market where you have no history yet.
+      A stretch the data says is viable.
+    - **NO PRIORITARIO** (gray): weak market or no real edge; prep cost likely
+      exceeds the win probability.
   A colored summary bar at the top counts each bucket. Signal grades are shown
-  in Spanish (FUERTE / MODERADA / DEBIL / SIN HISTORIAL / SIN VERIFICAR).
+  in Spanish (FUERTE / MODERADA / DEBIL / SIN HISTORIAL / SIN VERIFICAR), and the
+  personalized view adds Posicion / P Estimada / Contratos Previos columns.
 - **Detalle:** every field, one row per tender, for auditing a specific tender.
 
 Use `--raw-output` for the old English single-sheet export (internal/debug).
+
+**Personalizing the report:** set `filters.CLIENT_RFC` to the distributor's RFC.
+That turns on Layer 2 positioning (the position grade in the SIGNAL line) and
+switches the Resumen from urgency buckets to the strategic buckets above, leading
+with the opportunities the client is missing. Left as `None`, the report shows
+market-level intelligence and sorts by urgency.
 
 ### The prospect list (`--prospects`)
 

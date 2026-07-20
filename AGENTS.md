@@ -204,6 +204,28 @@ reports/              Generated shortlist files (gitignored)
   English single-sheet export is still available as `write_raw_xlsx`
   (`--raw-output`).
 
+- Strategic buckets (client report, Layer 2 active): when `filters.CLIENT_RFC`
+  is set the report leads with growth, not urgency. `write_client_xlsx` detects
+  that any tender carries a position and switches from the urgency buckets to
+  four strategic buckets via `intelligence.assign_strategic_bucket`, sorted by
+  `output._strategic_sort_key` (bucket order, then EXPERIENCED before ADJACENT
+  inside OPORTUNIDAD, then deadline ascending):
+    - OPORTUNIDAD (blue): EXPERIENCED/ADJACENT position in a STRONG/MODERATE
+      market. Blind spots the client is missing - has the product at other
+      buyers, or the buyer relationship in other categories, but is not
+      competing here. Leads the report.
+    - TERRITORIO (green): INCUMBENT. Buyers the client already wins; monitor and
+      defend, not discover.
+    - EXPLORAR (amber): OUTSIDER in a STRONG market. No relationship yet, but the
+      data says new entrants win here. Stretch targets for the sourcing feature.
+    - NO PRIORITARIO (gray): everything else (weak market, or no edge). Prep cost
+      likely exceeds the win probability.
+  Why OPORTUNIDAD leads: the client already knows their TERRITORIO and will bid
+  there regardless. They pay for the blind spots Veta reveals. When CLIENT_RFC
+  is None there is no position, so the report keeps the urgency buckets. The
+  Resumen adds Posicion / P Estimada / Contratos Previos columns after Señal,
+  with position grades in Spanish (TITULAR / CON EXPERIENCIA / ADYACENTE / NUEVO).
+
 - Cache freshness nudge: `build` writes `data/aggregated/cache_meta.json`
   (`built` date + `latest_contract` date). Every non-build run prints
   `history.cache_status_line()` to stderr, e.g. "Historical cache: built

@@ -158,6 +158,19 @@ def render_console(shortlist: list[EnrichedTender]) -> str:
         f"VETA SHORTLIST: {len(shortlist)} active licitaciones publicas "
         "with buyer intelligence\n"
     )
+    positioned = any(
+        t.primary_intel is not None and t.primary_intel.position is not None
+        for t in shortlist
+    )
+    if positioned:
+        c = {b: 0 for b in intelligence.STRATEGIC_BUCKETS}
+        for t in shortlist:
+            c[intelligence.assign_strategic_bucket(t)] += 1
+        header += (
+            f"Resumen: {c['OPORTUNIDAD']} oportunidades nuevas, "
+            f"{c['TERRITORIO']} en tu territorio, {c['EXPLORAR']} para explorar, "
+            f"{c['NO PRIORITARIO']} no prioritarios\n"
+        )
     return header + "\n\n".join(render_card(t) for t in shortlist)
 
 
@@ -254,12 +267,25 @@ def write_raw_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
 # Client-facing Spanish report (two sheets: Resumen + Detalle).
 # --------------------------------------------------------------------------- #
 
-# Action-bucket cell styling: (background hex, font hex, bold).
+# Action-bucket cell styling: (background hex, font hex, bold). Covers both the
+# urgency buckets (no CLIENT_RFC) and the strategic buckets (CLIENT_RFC set).
 _BUCKET_STYLE = {
     "ACTUAR": ("FF4444", "FFFFFF", True),
     "PREPARAR": ("FFAA00", "000000", False),
     "MONITOREAR": ("44AA44", "FFFFFF", True),
     "DESCARTAR": ("CCCCCC", "000000", False),
+    "OPORTUNIDAD": ("2563EB", "FFFFFF", True),
+    "TERRITORIO": ("16A34A", "FFFFFF", True),
+    "EXPLORAR": ("D97706", "000000", False),
+    "NO PRIORITARIO": ("9CA3AF", "000000", False),
+}
+
+# Position grade -> Spanish label for the client report.
+POSITION_ES = {
+    "INCUMBENT": "TITULAR",
+    "EXPERIENCED": "CON EXPERIENCIA",
+    "ADJACENT": "ADYACENTE",
+    "OUTSIDER": "NUEVO",
 }
 
 # Signal cell styling reuses the same palette by severity.
@@ -391,6 +417,22 @@ def _sort_key(t: EnrichedTender) -> tuple[int, datetime.date]:
     return (bucket_rank, deadline)
 
 
+def _strategic_sort_key(t: EnrichedTender) -> tuple[int, int, datetime.date]:
+    """Strategic sort: bucket order, then EXPERIENCED before ADJACENT within
+    OPORTUNIDAD (category expertise outranks buyer relationship alone), then
+    deadline ascending so time-sensitive tenders still surface within a group.
+    """
+    bucket = intelligence.assign_strategic_bucket(t)
+    bucket_rank = intelligence.STRATEGIC_BUCKETS.index(bucket)
+    sub = 0
+    if bucket == "OPORTUNIDAD":
+        p = t.primary_intel
+        grade = p.position.position_grade if (p and p.position) else ""
+        sub = {"EXPERIENCED": 0, "ADJACENT": 1}.get(grade, 2)
+    deadline = t.urgency.deadline.date() if t.urgency.deadline else datetime.date.max
+    return (bucket_rank, sub, deadline)
+
+
 def default_report_path() -> str:
     """Default client-report filename, dated for the day it is run."""
     return f"reports/reporte-veta-{datetime.date.today():%Y-%m-%d}.xlsx"
@@ -403,7 +445,21 @@ def write_client_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
-    ordered = sorted(shortlist, key=_sort_key)
+    # With a client RFC, positioning is active: lead with strategic value
+    # (opportunities the client is missing) instead of urgency. Otherwise keep
+    # the urgency buckets - market-level intelligence with no client position.
+    positioned = any(
+        t.primary_intel is not None and t.primary_intel.position is not None
+        for t in shortlist
+    )
+    if positioned:
+        bucket_of = intelligence.assign_strategic_bucket
+        buckets = intelligence.STRATEGIC_BUCKETS
+        ordered = sorted(shortlist, key=_strategic_sort_key)
+    else:
+        bucket_of = intelligence.assign_bucket
+        buckets = intelligence.BUCKETS
+        ordered = sorted(shortlist, key=_sort_key)
 
     header_fill = PatternFill("solid", fgColor="1F2937")
     header_font = Font(bold=True, color="FFFFFF")
@@ -419,26 +475,27 @@ def write_client_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
     ws["A1"] = "VETA - Reporte de Inteligencia"
     ws["A1"].font = Font(bold=True, size=14)
     today = datetime.date.today().strftime("%d/%m/%Y")
-    ws["A2"] = (
-        f"Generado: {today} | Perfil: LAASSP, {len(filters.INCLUDE_PARTIDAS)} "
-        "categorias | Licitaciones publicas vigentes"
-    )
+    ncat = len(filters.INCLUDE_PARTIDAS)
+    if positioned and filters.CLIENT_RFC:
+        ws["A2"] = (
+            f"Cliente: {filters.CLIENT_RFC} | Generado: {today} | Perfil: "
+            f"LAASSP, {ncat} categorias | Ordenado por oportunidad"
+        )
+    else:
+        ws["A2"] = (
+            f"Generado: {today} | Perfil: LAASSP, {ncat} categorias | "
+            "Licitaciones publicas vigentes"
+        )
 
-    counts = {b: 0 for b in intelligence.BUCKETS}
+    counts = {b: 0 for b in buckets}
     for t in ordered:
-        counts[intelligence.assign_bucket(t)] += 1
-    summary_cells = [
-        ("A4", f"ACTUAR: {counts['ACTUAR']}", "ACTUAR"),
-        ("B4", f"PREPARAR: {counts['PREPARAR']}", "PREPARAR"),
-        ("C4", f"MONITOREAR: {counts['MONITOREAR']}", "MONITOREAR"),
-        ("D4", f"DESCARTAR: {counts['DESCARTAR']}", "DESCARTAR"),
-        ("E4", f"Total: {len(ordered)}", None),
-    ]
-    for ref, text, bucket in summary_cells:
-        cell = ws[ref]
-        cell.value = text
+        counts[bucket_of(t)] += 1
+    summary = [(b, f"{b}: {counts[b]}") for b in buckets]
+    summary.append((None, f"Total: {len(ordered)}"))
+    for i, (bucket, text) in enumerate(summary, start=1):
+        cell = ws.cell(row=4, column=i, value=text)
         if bucket:
-            bg, fg, bold = _BUCKET_STYLE[bucket]
+            bg, fg, _bold = _BUCKET_STYLE[bucket]
             cell.fill = _fill(bg)
             cell.font = Font(bold=True, color=fg)
         else:
@@ -446,24 +503,29 @@ def write_client_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
             cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center")
 
-    # Layer 2 columns appear only when the run is client-specific (CLIENT_RFC).
-    has_position = any(
-        t.primary_intel is not None and t.primary_intel.position is not None
-        for t in ordered
-    )
-    headers = list(_RESUMEN_HEADERS)
-    widths = list(_RESUMEN_WIDTHS)
-    if has_position:
-        headers += ["Posicion", "P Estimada", "Contratos Previos"]
-        widths += [14, 14, 16]
+    # Columns: base through Señal, then (if positioned) the position columns,
+    # then Items and Competidores.
+    base_headers = [
+        "Accion", "No. Procedimiento", "Institucion", "Estado", "Descripcion",
+        "Categoria", "Fecha Apertura", "Dias Restantes (cal.)", "Monto Estimado",
+        "Banda Historica", "Mediana Hist.", "Tasa Nuevos", "Señal",
+    ]
+    base_widths = [14, 32, 10, 16, 50, 40, 12, 18, 18, 24, 16, 8, 14]
+    pos_headers = ["Posicion", "P Estimada", "Contratos Previos"]
+    pos_widths = [16, 12, 16]
+    tail_headers = ["Items", "Competidores"]
+    tail_widths = [10, 50]
+    headers = base_headers + (pos_headers if positioned else []) + tail_headers
+    widths = base_widths + (pos_widths if positioned else []) + tail_widths
+    col = {name: idx for idx, name in enumerate(headers, start=1)}
 
     header_row = 6
-    for col, name in enumerate(headers, start=1):
-        cell = ws.cell(row=header_row, column=col, value=name)
+    for name, idx in col.items():
+        cell = ws.cell(row=header_row, column=idx, value=name)
         cell.fill = header_fill
         cell.font = header_font
-    for col, width in enumerate(widths, start=1):
-        ws.column_dimensions[get_column_letter(col)].width = width
+    for idx, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
 
     red_font = Font(color="CC0000")
     amber_font = Font(color="B45309")
@@ -472,71 +534,63 @@ def write_client_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
     row = header_row + 1
     for t in ordered:
         p = t.primary_intel
-        bucket = intelligence.assign_bucket(t)
+        bucket = bucket_of(t)
         days = t.urgency.days_to_deadline
         deadline = t.urgency.deadline.date() if t.urgency.deadline else None
         senal = _senal_es(t.signal)
-
-        ws.cell(row=row, column=1, value=bucket)
-        ws.cell(row=row, column=2, value=t.numero_procedimiento)
-        ws.cell(row=row, column=3, value=t.siglas)
-        ws.cell(row=row, column=4, value=t.entidad_federativa)
-        ws.cell(row=row, column=5, value=(t.nombre_procedimiento or "")[:60])
-        ws.cell(row=row, column=6, value=_categoria_cell(t))
-        dcell = ws.cell(row=row, column=7, value=deadline)
-        if deadline is not None:
-            dcell.number_format = "DD/MM/YYYY"
-        ws.cell(row=row, column=8, value=days)
-        ws.cell(row=row, column=9, value=_monto_cell(t))
-        ws.cell(row=row, column=10, value=_banda_cell(p))
-        mcell = ws.cell(
-            row=row, column=11,
-            value=p.price_median if (p and p.price_median is not None) else "S/D",
-        )
-        if p and p.price_median is not None:
-            mcell.number_format = "#,##0"
-        ws.cell(
-            row=row, column=12,
-            value=f"{p.new_entrant_rate:.0%}" if (p and p.new_entrant_rate is not None) else "S/D",
-        )
-        # Flag thin-data grades so a low-confidence Señal is visible at a glance.
         low_conf = bool(p and p.has_history and p.confidence == "low")
-        ws.cell(row=row, column=13, value=senal + (" *" if low_conf else ""))
-        ws.cell(row=row, column=14, value=_items_cell(t))
-        ws.cell(row=row, column=15, value=_competidores_cell(p))
 
-        if has_position:
+        values = {
+            "Accion": bucket,
+            "No. Procedimiento": t.numero_procedimiento,
+            "Institucion": t.siglas,
+            "Estado": t.entidad_federativa,
+            "Descripcion": (t.nombre_procedimiento or "")[:60],
+            "Categoria": _categoria_cell(t),
+            "Fecha Apertura": deadline,
+            "Dias Restantes (cal.)": days,
+            "Monto Estimado": _monto_cell(t),
+            "Banda Historica": _banda_cell(p),
+            "Mediana Hist.": p.price_median if (p and p.price_median is not None) else "S/D",
+            "Tasa Nuevos": f"{p.new_entrant_rate:.0%}" if (p and p.new_entrant_rate is not None) else "S/D",
+            "Señal": senal + (" *" if low_conf else ""),
+            "Items": _items_cell(t),
+            "Competidores": _competidores_cell(p),
+        }
+        if positioned:
             pos = p.position if p else None
-            if pos is not None:
-                ws.cell(row=row, column=16, value=pos.position_grade)
-                pcell = ws.cell(
-                    row=row, column=17,
-                    value=f"{pos.p_win_low:.0%}-{pos.p_win_high:.0%}",
-                )
-                pcell.alignment = Alignment(horizontal="center")
-                ws.cell(row=row, column=18, value=pos.n_prior_wins)
-            else:
-                ws.cell(row=row, column=16, value="S/D")
+            values["Posicion"] = POSITION_ES.get(pos.position_grade, "S/D") if pos else "S/D"
+            values["P Estimada"] = f"{pos.p_win_low:.0%}-{pos.p_win_high:.0%}" if pos else "S/D"
+            values["Contratos Previos"] = pos.n_prior_wins if pos else 0
+
+        for name, value in values.items():
+            cell = ws.cell(row=row, column=col[name], value=value)
+            if name == "Fecha Apertura" and deadline is not None:
+                cell.number_format = "DD/MM/YYYY"
+            elif name == "Mediana Hist." and p and p.price_median is not None:
+                cell.number_format = "#,##0"
+            elif name == "P Estimada":
+                cell.alignment = Alignment(horizontal="center")
 
         # Conditional styling.
-        bg, fg, bold = _BUCKET_STYLE[bucket]
-        acell = ws.cell(row=row, column=1)
+        bg, fg, _bold = _BUCKET_STYLE[bucket]
+        acell = ws.cell(row=row, column=col["Accion"])
         acell.fill = _fill(bg)
         acell.font = Font(bold=True, color=fg)
 
         if days is not None:
-            dr = ws.cell(row=row, column=8)
+            dr = ws.cell(row=row, column=col["Dias Restantes (cal.)"])
             dr.font = red_font if days <= 3 else amber_font if days <= 7 else green_font
 
         if p and p.new_entrant_rate is not None:
-            tn = ws.cell(row=row, column=12)
+            tn = ws.cell(row=row, column=col["Tasa Nuevos"])
             if p.new_entrant_rate >= 0.30:
                 tn.font = green_font
             elif p.new_entrant_rate < 0.15:
                 tn.font = red_font
 
         sbg, sfg, sbold = _SIGNAL_STYLE.get(senal, ("CCCCCC", "000000", False))
-        scell = ws.cell(row=row, column=13)
+        scell = ws.cell(row=row, column=col["Señal"])
         scell.fill = _fill(sbg)
         scell.font = Font(bold=sbold, color=sfg)
         row += 1
@@ -560,7 +614,7 @@ def write_client_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
     for i, t in enumerate(shortlist):
         r = i + 2
         record = frame.iloc[i]
-        ws2.cell(row=r, column=1, value=intelligence.assign_bucket(t))
+        ws2.cell(row=r, column=1, value=bucket_of(t))
         for col, (key, _es) in enumerate(_DETALLE_COLUMNS, start=2):
             value = record[key]
             if pd.isna(value):
