@@ -169,6 +169,59 @@ def build_prospects(
     return prospects
 
 
+def qualify_prospects(
+    prospects: list[Prospect],
+    *,
+    min_categories: int = 5,
+    min_buyers: int = 5,
+    min_licitacion_ratio: float = 0.70,
+    min_contracts: int = 10,
+    max_contracts: int = 500,
+    sizes: tuple[str, ...] = ("PEQUEÑA", "MEDIANA"),
+    require_latest_year: bool = True,
+) -> list[Prospect]:
+    """Narrow a prospect list to the outreach-ready "sweet spot".
+
+    Applies the six qualification criteria (all must pass), keeping only the
+    companies most likely to buy a paid tender-intelligence subscription:
+
+      - Multi-category (min_categories): gets real value from a cross-category
+        feed; single-category suppliers can just check ComprasMX by hand.
+      - Actively bidding now (require_latest_year): last win is in the most
+        recent year present in the data (computed, never hardcoded).
+      - Right size (sizes): has budget but no in-house intelligence team.
+      - Broad buyer reach (min_buyers): values buyer-specific intelligence.
+      - Competitive (min_licitacion_ratio): wins through licitaciones, not
+        mostly adjudicacion directa; the latter does not need the tool.
+      - Engaged but not industrial (min/max_contracts): participates enough to
+        care, not so much that they likely have internal systems.
+
+    Input is assumed to be score-sorted (build_prospects output); order is
+    preserved. Returns [] on empty input.
+    """
+    if not prospects:
+        return []
+
+    latest = max(p.last_year for p in prospects)
+
+    def _passes(p: Prospect) -> bool:
+        ratio = (
+            p.licitacion_contracts / p.total_contracts
+            if p.total_contracts
+            else 0.0
+        )
+        return (
+            p.distinct_partidas >= min_categories
+            and p.distinct_buyers >= min_buyers
+            and ratio >= min_licitacion_ratio
+            and min_contracts <= p.total_contracts <= max_contracts
+            and p.estratificacion in sizes
+            and (not require_latest_year or p.last_year == latest)
+        )
+
+    return [p for p in prospects if _passes(p)]
+
+
 def _mode(series: pd.Series) -> str:
     """Most frequent non-null value in a series, or empty string."""
     clean = series.dropna()

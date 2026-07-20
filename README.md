@@ -103,6 +103,7 @@ python run.py --output report.xlsx # or to a specific path (Resumen + Detalle, S
 python run.py --raw-output raw.xlsx # write the raw single-sheet export (internal/debug)
 python run.py --sourcing 51501     # supplier lookup for a partida clave
 python run.py --prospects          # ranked list of potential clients -> reports/prospectos-veta-{date}.xlsx
+python run.py --prospects --qualify # only the outreach-ready sweet spot (~50)
 python run.py --prospects list.xlsx --all-sizes  # include GRANDE/NO MIPYME, custom path
 python run.py --brief LA-07-...    # full bid brief for one tender (numero or uuid)
 python run.py --brief LA-07-... --download reports/anexos  # brief + download attachments
@@ -150,6 +151,13 @@ The fit score weights category breadth (a multi-category distributor gets more
 value from a cross-category feed) and recency, with competitive participation
 and buyer reach as supporting signals. Output is a single-sheet XLSX with the
 company, RFC, size, win volume, categories, buyers, and score.
+
+Add `--qualify` to narrow the full universe (~2,895) down to the outreach-ready
+sweet spot (~50): PEQUEÑA/MEDIANA companies with 5+ categories, 5+ buyers, 70%+
+of wins through licitaciones, 10-500 contracts, and activity in the most recent
+year of data. These are the firms with budget, no in-house intelligence team,
+and a genuine competitive-tender need - the right first calls. Thresholds are
+keyword args on `qualify_prospects()` for tuning.
 
 Contact note: ComprasMX does not publish supplier emails or contact people, so
 the list identifies the **company** (RFC + name + profile). Enrich with contact

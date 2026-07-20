@@ -89,3 +89,59 @@ def test_score_favors_breadth_and_recency():
     result = prospects.build_prospects(df)
     assert result[0].rfc == "BROAD00000A"
     assert result[0].score > result[1].score
+
+
+def _prospect(rfc: str, **overrides) -> prospects.Prospect:
+    """Build a Prospect that passes every qualify criterion by default."""
+    defaults = dict(
+        rfc=rfc,
+        proveedor=f"EMPRESA {rfc}",
+        estratificacion="PEQUEÑA",
+        total_contracts=50,
+        licitacion_contracts=40,  # 0.80 ratio
+        total_value=1_000_000.0,
+        distinct_partidas=6,
+        distinct_buyers=8,
+        last_year=2025,
+        years_active=3,
+        score=100.0,
+    )
+    defaults.update(overrides)
+    return prospects.Prospect(**defaults)
+
+
+def test_qualify_filters_by_all_criteria():
+    good = _prospect("GOOD")
+    fails = [
+        _prospect("FEWCAT", distinct_partidas=4),
+        _prospect("FEWBUY", distinct_buyers=4),
+        _prospect("LOWLIC", licitacion_contracts=20),  # 0.40 ratio
+        _prospect("TOOFEW", total_contracts=9, licitacion_contracts=9),
+        _prospect("TOOMANY", total_contracts=600, licitacion_contracts=600),
+        _prospect("MICRO", estratificacion="MICRO"),
+        _prospect("STALE", last_year=2024),
+    ]
+    result = prospects.qualify_prospects([good, *fails])
+    assert [p.rfc for p in result] == ["GOOD"]
+
+
+def test_qualify_require_latest_year_is_dynamic():
+    # Max year in the data is 2024, so a 2024 company is "current".
+    recent = _prospect("RECENT2024", last_year=2024)
+    old = _prospect("OLD2023", last_year=2023)
+    result = prospects.qualify_prospects([recent, old])
+    assert [p.rfc for p in result] == ["RECENT2024"]
+
+    # Disabling the check keeps the older one too.
+    both = prospects.qualify_prospects([recent, old], require_latest_year=False)
+    assert {p.rfc for p in both} == {"RECENT2024", "OLD2023"}
+
+
+def test_qualify_returns_empty_when_none_pass():
+    fails = [
+        _prospect("A", distinct_partidas=1),
+        _prospect("B", estratificacion="GRANDE"),
+        _prospect("C", licitacion_contracts=0),
+    ]
+    assert prospects.qualify_prospects(fails) == []
+    assert prospects.qualify_prospects([]) == []

@@ -9,6 +9,7 @@ Commands:
     python run.py --output report.xlsx also write the shortlist to XLSX
     python run.py --sourcing 51501     supplier lookup for a partida
     python run.py --prospects          ranked list of potential clients (sales)
+    python run.py --prospects --qualify  only the outreach-ready sweet spot
     python run.py --prospects list.xlsx  also write the prospect list to XLSX
     python run.py --scan               adjacent opportunity scanner
     python run.py --calendar           procurement calendar (typical months)
@@ -46,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="ranked list of potential clients (SME suppliers in target categories); pass FILE or omit for reports/prospectos-veta-{date}.xlsx",
     )
     parser.add_argument("--all-sizes", action="store_true", dest="all_sizes", help="with --prospects, include GRANDE/NO MIPYME (not just MIPYME)")
+    parser.add_argument("--qualify", action="store_true", help="with --prospects, keep only the outreach-ready sweet spot")
     parser.add_argument("--brief", metavar="NUMERO", help="full bid brief for one tender (numero or uuid)")
     parser.add_argument("--download", metavar="DIR", help="with --brief, download attachments to DIR")
     parser.add_argument("--scan", action="store_true", help="adjacent opportunity scanner")
@@ -78,7 +80,9 @@ def _cmd_sourcing(clave: str, limit: int | None) -> None:
             print(f"       top buyers: {', '.join(s.top_buyers)}")
 
 
-def _cmd_prospects(output: str | None, limit: int | None, all_sizes: bool) -> None:
+def _cmd_prospects(
+    output: str | None, limit: int | None, all_sizes: bool, qualify: bool
+) -> None:
     from veta import output as out, prospects as prospects_mod
 
     if output == "":
@@ -91,12 +95,27 @@ def _cmd_prospects(output: str | None, limit: int | None, all_sizes: bool) -> No
         print("No prospects found. Build the historical cache first (--build).")
         return
 
+    total = len(ranked)
+    if qualify:
+        ranked = prospects_mod.qualify_prospects(ranked)
+        if not ranked:
+            print(f"No qualified prospects among {total:,} companies.")
+            return
+
     shown = ranked[: (limit or 25)]
     scope = "todos los tamaños" if all_sizes else "MIPYME"
-    print(
-        f"Potential clients: {len(ranked)} companies competing in target "
-        f"categories ({scope}). Top {len(shown)} by fit score:\n"
-    )
+    if qualify:
+        year = max(p.last_year for p in ranked)
+        print(
+            f"Qualified prospects: {len(ranked):,} of {total:,} companies "
+            f"(PEQUEÑA/MEDIANA, 5+ categories, 5+ buyers, 70%+ licitaciones, "
+            f"10-500 contracts, active {year}). Top {len(shown)}:\n"
+        )
+    else:
+        print(
+            f"Potential clients: {len(ranked):,} companies competing in target "
+            f"categories ({scope}). Top {len(shown)} by fit score:\n"
+        )
     for i, p in enumerate(shown, start=1):
         print(
             f"  {i:>2}. {p.proveedor[:42]:42} {p.rfc:14} {p.estratificacion:9} "
@@ -234,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.sourcing:
         _cmd_sourcing(args.sourcing, args.limit)
     elif args.prospects is not None:
-        _cmd_prospects(args.prospects, args.limit, args.all_sizes)
+        _cmd_prospects(args.prospects, args.limit, args.all_sizes, args.qualify)
     elif args.brief:
         _cmd_brief(args.brief, args.download)
     elif args.scan:
