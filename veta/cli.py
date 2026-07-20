@@ -8,6 +8,8 @@ Commands:
     python run.py --buyer IMSS         filter the shortlist by buyer siglas
     python run.py --output report.xlsx also write the shortlist to XLSX
     python run.py --sourcing 51501     supplier lookup for a partida
+    python run.py --prospects          ranked list of potential clients (sales)
+    python run.py --prospects list.xlsx  also write the prospect list to XLSX
     python run.py --scan               adjacent opportunity scanner
     python run.py --calendar           procurement calendar (typical months)
     python run.py --build              (re)build the historical cache (step 1)
@@ -39,6 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--raw-output", metavar="FILE", dest="raw_output", help="write the raw single-sheet export (internal/debug)")
     parser.add_argument("--sourcing", metavar="CLAVE", help="supplier lookup for a partida clave")
+    parser.add_argument(
+        "--prospects", metavar="FILE", nargs="?", const="",
+        help="ranked list of potential clients (SME suppliers in target categories); pass FILE or omit for reports/prospectos-veta-{date}.xlsx",
+    )
+    parser.add_argument("--all-sizes", action="store_true", dest="all_sizes", help="with --prospects, include GRANDE/NO MIPYME (not just MIPYME)")
     parser.add_argument("--brief", metavar="NUMERO", help="full bid brief for one tender (numero or uuid)")
     parser.add_argument("--download", metavar="DIR", help="with --brief, download attachments to DIR")
     parser.add_argument("--scan", action="store_true", help="adjacent opportunity scanner")
@@ -69,6 +76,37 @@ def _cmd_sourcing(clave: str, limit: int | None) -> None:
         )
         if s.top_buyers:
             print(f"       top buyers: {', '.join(s.top_buyers)}")
+
+
+def _cmd_prospects(output: str | None, limit: int | None, all_sizes: bool) -> None:
+    from veta import output as out, prospects as prospects_mod
+
+    if output == "":
+        output = out.default_prospects_path()
+    if output:
+        out.check_xlsx_writable(output)
+
+    ranked = prospects_mod.build_prospects(mipyme_only=not all_sizes)
+    if not ranked:
+        print("No prospects found. Build the historical cache first (--build).")
+        return
+
+    shown = ranked[: (limit or 25)]
+    scope = "todos los tamaños" if all_sizes else "MIPYME"
+    print(
+        f"Potential clients: {len(ranked)} companies competing in target "
+        f"categories ({scope}). Top {len(shown)} by fit score:\n"
+    )
+    for i, p in enumerate(shown, start=1):
+        print(
+            f"  {i:>2}. {p.proveedor[:42]:42} {p.rfc:14} {p.estratificacion:9} "
+            f"{p.total_contracts:>3}c/{p.licitacion_contracts:>3}lic  "
+            f"{p.distinct_partidas}cat  {p.distinct_buyers}buyers  "
+            f"${p.total_value:>14,.0f}  ~{p.last_year}"
+        )
+    if output:
+        out.write_prospects_xlsx(ranked, output)
+        print(f"\nWrote prospect list ({len(ranked)} companies) to {output}")
 
 
 def _cmd_brief(identifier: str, download: str | None) -> None:
@@ -195,6 +233,8 @@ def main(argv: list[str] | None = None) -> int:
         _cmd_build(args.refresh)
     elif args.sourcing:
         _cmd_sourcing(args.sourcing, args.limit)
+    elif args.prospects is not None:
+        _cmd_prospects(args.prospects, args.limit, args.all_sizes)
     elif args.brief:
         _cmd_brief(args.brief, args.download)
     elif args.scan:

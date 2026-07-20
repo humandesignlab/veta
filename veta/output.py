@@ -489,3 +489,81 @@ def write_client_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
 
     wb.save(path)
     return path
+
+
+# --------------------------------------------------------------------------- #
+# Prospect (potential-client) list.
+# --------------------------------------------------------------------------- #
+
+_PROSPECT_HEADERS = [
+    "#", "Empresa", "RFC", "Tamaño", "Contratos", "Licitaciones",
+    "Valor Total (MXN)", "Categorias", "Categorias (detalle)", "Compradores",
+    "Top Compradores", "Ultimo Año", "Años Activo", "Puntaje",
+]
+_PROSPECT_WIDTHS = [5, 46, 15, 10, 10, 12, 20, 11, 55, 12, 40, 11, 11, 9]
+
+
+def default_prospects_path() -> str:
+    """Default prospect-list filename, dated for the day it is run."""
+    return f"reports/prospectos-veta-{datetime.date.today():%Y-%m-%d}.xlsx"
+
+
+def write_prospects_xlsx(prospects: list, path: str) -> str:
+    """Write the ranked potential-client list to a single-sheet XLSX."""
+    check_xlsx_writable(path)
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Prospectos"
+
+    ws["A1"] = "VETA - Clientes Potenciales"
+    ws["A1"].font = Font(bold=True, size=14)
+    today = datetime.date.today().strftime("%d/%m/%Y")
+    ws["A2"] = (
+        f"Generado: {today} | {len(prospects)} empresas | Perfil: proveedores "
+        "MIPYME activos que compiten en las categorias objetivo (LAASSP)"
+    )
+    ws["A3"] = (
+        "Nota: ComprasMX no publica contacto/correo. Enriquecer con datos de "
+        "contacto antes del envio diario."
+    )
+    ws["A3"].font = Font(italic=True, color="6B7280")
+
+    header_row = 5
+    header_fill = PatternFill("solid", fgColor="1F2937")
+    header_font = Font(bold=True, color="FFFFFF")
+    for col, name in enumerate(_PROSPECT_HEADERS, start=1):
+        cell = ws.cell(row=header_row, column=col, value=name)
+        cell.fill = header_fill
+        cell.font = header_font
+    for col, width in enumerate(_PROSPECT_WIDTHS, start=1):
+        ws.column_dimensions[chr(64 + col)].width = width
+
+    row = header_row + 1
+    for i, p in enumerate(prospects, start=1):
+        ws.cell(row=row, column=1, value=i)
+        ws.cell(row=row, column=2, value=p.proveedor)
+        ws.cell(row=row, column=3, value=p.rfc)
+        ws.cell(row=row, column=4, value=p.estratificacion)
+        ws.cell(row=row, column=5, value=p.total_contracts)
+        ws.cell(row=row, column=6, value=p.licitacion_contracts)
+        vcell = ws.cell(row=row, column=7, value=p.total_value)
+        vcell.number_format = "#,##0"
+        ws.cell(row=row, column=8, value=p.distinct_partidas)
+        ws.cell(row=row, column=9, value=", ".join(p.partidas)[:200])
+        ws.cell(row=row, column=10, value=p.distinct_buyers)
+        ws.cell(row=row, column=11, value=", ".join(p.top_buyers))
+        ws.cell(row=row, column=12, value=p.last_year)
+        ws.cell(row=row, column=13, value=p.years_active)
+        ws.cell(row=row, column=14, value=round(p.score, 1))
+        row += 1
+
+    last = max(row - 1, header_row)
+    ws.auto_filter.ref = f"A{header_row}:N{last}"
+    ws.freeze_panes = f"A{header_row + 1}"
+    ws["A1"].alignment = Alignment(vertical="center")
+
+    wb.save(path)
+    return path

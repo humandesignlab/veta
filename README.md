@@ -102,6 +102,8 @@ python run.py --output             # write the client report to reports/reporte-
 python run.py --output report.xlsx # or to a specific path (Resumen + Detalle, Spanish)
 python run.py --raw-output raw.xlsx # write the raw single-sheet export (internal/debug)
 python run.py --sourcing 51501     # supplier lookup for a partida clave
+python run.py --prospects          # ranked list of potential clients -> reports/prospectos-veta-{date}.xlsx
+python run.py --prospects list.xlsx --all-sizes  # include GRANDE/NO MIPYME, custom path
 python run.py --brief LA-07-...    # full bid brief for one tender (numero or uuid)
 python run.py --brief LA-07-... --download reports/anexos  # brief + download attachments
 python run.py --scan               # adjacent opportunity scanner
@@ -130,6 +132,28 @@ is expected, not a hang.
 - **Detalle:** every field, one row per tender, for auditing a specific tender.
 
 Use `--raw-output` for the old English single-sheet export (internal/debug).
+
+### The prospect list (`--prospects`)
+
+Who buys a daily tender-intelligence email? Companies that already compete for
+federal contracts in the target categories. `--prospects` mines the historical
+contracts cache for exactly those firms and ranks them by fit:
+
+- **Active:** won a contract in the last two years (still bidding).
+- **MIPYME by default:** MICRO / PEQUEÑA / MEDIANA - big enough to have budget,
+  small enough to lack a bid-intelligence team. Use `--all-sizes` to include
+  GRANDE / NO MIPYME.
+- **Competitive:** has licitación (public-tender) wins, not only direct awards.
+- **Engaged:** more than a one-off winner.
+
+The fit score weights category breadth (a multi-category distributor gets more
+value from a cross-category feed) and recency, with competitive participation
+and buyer reach as supporting signals. Output is a single-sheet XLSX with the
+company, RFC, size, win volume, categories, buyers, and score.
+
+Contact note: ComprasMX does not publish supplier emails or contact people, so
+the list identifies the **company** (RFC + name + profile). Enrich with contact
+data (your provider, RUPC, or manual lookup) before wiring up the daily send.
 
 ## Project layout
 
