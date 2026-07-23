@@ -417,20 +417,52 @@ def _sort_key(t: EnrichedTender) -> tuple[int, datetime.date]:
     return (bucket_rank, deadline)
 
 
-def _strategic_sort_key(t: EnrichedTender) -> tuple[int, int, datetime.date]:
-    """Strategic sort: bucket order, then EXPERIENCED before ADJACENT within
-    OPORTUNIDAD (category expertise outranks buyer relationship alone), then
-    deadline ascending so time-sensitive tenders still surface within a group.
+# How many tenders to flag as the actionable "Top 5" slice. A PEQUEÑA
+# distributor can realistically prepare only a handful of bids per cycle, so the
+# report highlights the best few. The slice is cross-bucket (any bucket except
+# NO PRIORITARIO): a high-probability incumbent tender is a better action item
+# than a low-probability opportunity, so the star means "act first", by odds.
+TOP_ACTIONS = 5
+
+# Buckets whose tenders are eligible for a star (NO PRIORITARIO is excluded).
+_STARRABLE_BUCKETS = ("OPORTUNIDAD", "TERRITORIO", "EXPLORAR")
+
+# Priority ranks tenders for the Top 5 and orders the OPORTUNIDAD section. Win
+# probability is the primary driver (chasing a tender you are unlikely to win
+# wastes scarce prep time - urgency without a basis is a trap); a near deadline
+# only adds a bounded bonus, so it breaks ties among comparable-P tenders without
+# ever letting a low-P tender leapfrog a strong one just because it closes soon.
+_PRIORITY_DEADLINE_BONUS = 0.5
+_PRIORITY_HORIZON_DAYS = 30.0
+
+
+def _action_priority(t: EnrichedTender) -> float:
+    """Actionability score: P estimate with a bounded deadline-proximity bonus.
+
+    Higher is more actionable. Passed/undated deadlines get no proximity bonus.
+    """
+    p = t.primary_intel
+    pos = p.position if p else None
+    p_mid = (pos.p_win_low + pos.p_win_high) / 2 if pos else 0.0
+    days = t.urgency.days_to_deadline
+    if days is None or days < 0:
+        proximity = 0.0
+    else:
+        proximity = max(0.0, 1.0 - days / _PRIORITY_HORIZON_DAYS)
+    return p_mid * (1.0 + _PRIORITY_DEADLINE_BONUS * proximity)
+
+
+def _strategic_sort_key(t: EnrichedTender) -> tuple[int, float, int]:
+    """Strategic sort: bucket order first, then within OPORTUNIDAD by priority
+    (P estimate + deadline proximity) so the actionable slice floats to the top;
+    all other buckets keep a deadline-ascending order.
     """
     bucket = intelligence.assign_strategic_bucket(t)
     bucket_rank = intelligence.STRATEGIC_BUCKETS.index(bucket)
-    sub = 0
-    if bucket == "OPORTUNIDAD":
-        p = t.primary_intel
-        grade = p.position.position_grade if (p and p.position) else ""
-        sub = {"EXPERIENCED": 0, "ADJACENT": 1}.get(grade, 2)
     deadline = t.urgency.deadline.date() if t.urgency.deadline else datetime.date.max
-    return (bucket_rank, sub, deadline)
+    if bucket == "OPORTUNIDAD":
+        return (bucket_rank, -_action_priority(t), deadline.toordinal())
+    return (bucket_rank, float(deadline.toordinal()), deadline.toordinal())
 
 
 def default_report_path() -> str:
@@ -531,17 +563,28 @@ def write_client_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
     amber_font = Font(color="B45309")
     green_font = Font(color="1E7B1E")
 
+    # Flag the actionable Top-5 by win probability across all buckets except
+    # NO PRIORITARIO: a high-probability incumbent tender deserves a star as much
+    # as a strong opportunity. Selection is by priority, independent of the sheet
+    # sort order, so stars can land in any (starrable) bucket.
+    top5_ids: set[int] = set()
+    if positioned:
+        eligible = [t for t in ordered if bucket_of(t) in _STARRABLE_BUCKETS]
+        eligible.sort(key=_action_priority, reverse=True)
+        top5_ids = {id(t) for t in eligible[:TOP_ACTIONS]}
+
     row = header_row + 1
     for t in ordered:
         p = t.primary_intel
         bucket = bucket_of(t)
+        is_top = id(t) in top5_ids
         days = t.urgency.days_to_deadline
         deadline = t.urgency.deadline.date() if t.urgency.deadline else None
         senal = _senal_es(t.signal)
         low_conf = bool(p and p.has_history and p.confidence == "low")
 
         values = {
-            "Accion": bucket,
+            "Accion": bucket + (" \u2605" if is_top else ""),
             "No. Procedimiento": t.numero_procedimiento,
             "Institucion": t.siglas,
             "Estado": t.entidad_federativa,
@@ -601,6 +644,12 @@ def write_client_xlsx(shortlist: list[EnrichedTender], path: str) -> str:
     ws.freeze_panes = "A7"
     note = ws.cell(row=last + 2, column=1, value="* Señal de baja confianza (pocos datos historicos, n<8)")
     note.font = Font(italic=True, color="6B7280")
+    if positioned:
+        star = ws.cell(
+            row=last + 3, column=1,
+            value="\u2605 Top 5 de la semana: mayor probabilidad estimada + cierre proximo (todas las categorias)",
+        )
+        star.font = Font(italic=True, color="6B7280")
 
     # ---- Sheet 2: Detalle ------------------------------------------------- #
     ws2 = wb.create_sheet("Detalle")

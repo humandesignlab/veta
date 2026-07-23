@@ -63,6 +63,35 @@ def test_category_transfer_is_experienced():
     assert pos.n_other_buyers_same_partida == 3
 
 
+def test_category_below_evidence_threshold_is_outsider():
+    # Only 2 contracts in the partida (below MIN_CATEGORY_EVIDENCE) and no
+    # relationship with the buyer: one-off wins are noise, not expertise.
+    contracts = _contracts([{"siglas": "ISSSTE"}, {"siglas": "SEDENA"}])
+    pos = _position(contracts)
+    assert pos.position_grade == "OUTSIDER"
+    assert pos.category_strength == 0.0
+
+
+def test_category_below_evidence_threshold_with_relationship_is_adjacent():
+    # 2 partida contracts elsewhere (below threshold) but a real relationship
+    # with the target buyer in other partidas -> ADJACENT, not EXPERIENCED.
+    contracts = _contracts(
+        [{"siglas": "ISSSTE"}, {"siglas": "SEDENA"}]
+        + [{"siglas": "IMSS", "partida": p} for p in ["21101", "27101"]]
+    )
+    pos = _position(contracts, partida="25401")
+    assert pos.position_grade == "ADJACENT"
+    assert pos.category_strength == 0.0
+
+
+def test_category_at_evidence_threshold_is_experienced():
+    # Exactly MIN_CATEGORY_EVIDENCE contracts at a single other buyer qualifies.
+    contracts = _contracts([{"siglas": "ISSSTE"} for _ in range(3)])
+    pos = _position(contracts)
+    assert pos.position_grade == "EXPERIENCED"
+    assert pos.category_strength > 0.0
+
+
 def test_relationship_transfer_is_adjacent():
     # Client sells other partidas to IMSS, but never partida 25401 anywhere.
     contracts = _contracts([
@@ -73,13 +102,40 @@ def test_relationship_transfer_is_adjacent():
     assert pos.n_other_partidas_same_buyer == 5
 
 
-def test_outsider_has_base_rate():
-    # No client history anywhere near this buyer or partida.
+def test_outsider_is_fraction_of_market_rate():
+    # A cold outsider gets only the baseline fraction of the market's collective
+    # new-entrant rate, not the full rate (which is shared among all entrants).
     contracts = _contracts([{"rfc": "OTHER00000X", "siglas": "PEMEX", "partida": "99999"}])
     pos = _position(contracts)
     assert pos.position_grade == "OUTSIDER"
     midpoint = (pos.p_win_low + pos.p_win_high) / 2
-    assert abs(midpoint - BASE_RATE) < 1e-6
+    assert abs(midpoint - BASE_RATE * positioning.NON_INCUMBENT_BASELINE) < 1e-6
+    assert midpoint < BASE_RATE  # never inflated to the market rate
+
+
+def test_non_incumbent_capped_below_certainty():
+    # High-openness market + strong category expertise must not produce a
+    # near-certain win for a company with zero prior contracts at this buyer.
+    contracts = _contracts([
+        {"siglas": s} for s in ["ISSSTE", "SEDENA", "PEMEX", "SAT", "IPN", "CFE"]
+    ])
+    pos = positioning.compute_position(
+        CLIENT, "IMSS", "25401", contracts,
+        repeat_win_rate=0.9, openness_shrunk=0.9,
+        current_year=2026, confidence="high",
+    )
+    assert pos.position_grade == "EXPERIENCED"
+    assert pos.p_win_high <= positioning.NON_INCUMBENT_P_CAP
+
+
+def test_experienced_beats_outsider_probability():
+    outsider = _position(
+        _contracts([{"rfc": "OTHER00000X", "siglas": "PEMEX", "partida": "99999"}])
+    )
+    experienced = _position(_contracts([
+        {"siglas": "ISSSTE"}, {"siglas": "SEDENA"}, {"siglas": "PEMEX"},
+    ]))
+    assert experienced.p_win_high > outsider.p_win_high
 
 
 def test_probability_cap():

@@ -297,19 +297,20 @@ STRATEGIC_BUCKETS = ["OPORTUNIDAD", "TERRITORIO", "EXPLORAR", "NO PRIORITARIO"]
 def assign_strategic_bucket(tender: EnrichedTender) -> str:
     """Map a tender to a strategic bucket from position + market grade.
 
-    Only meaningful when CLIENT_RFC is set (the primary intel carries a
-    position). Falls back to the urgency bucket when there is no position, so
-    callers can use it uniformly.
+    Called only for client-specific (CLIENT_RFC) runs, so it always returns one
+    of STRATEGIC_BUCKETS. A tender with no position (no matched history at all)
+    has no relationship and no proven edge, so it lands in NO PRIORITARIO - the
+    strategic equivalent of DESCARTAR: urgency without a basis to win is a trap.
 
     - OPORTUNIDAD: EXPERIENCED/ADJACENT position in a STRONG/MODERATE market
       (relevant capability, not yet competing here) - the client's blind spots.
     - TERRITORIO:  INCUMBENT - buyers the client already wins; monitor/defend.
     - EXPLORAR:    OUTSIDER in a STRONG market - a stretch the data says is viable.
-    - NO PRIORITARIO: everything else (weak market or no relationship or no edge).
+    - NO PRIORITARIO: everything else (weak market, no relationship, or no edge).
     """
     intel = tender.primary_intel
     if intel is None or intel.position is None:
-        return assign_bucket(tender)
+        return "NO PRIORITARIO"
 
     grade = intel.base_grade
     pos = intel.position.position_grade

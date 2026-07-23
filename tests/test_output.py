@@ -120,16 +120,17 @@ def _position(grade, plow=0.20, phigh=0.30, prior=0):
     )
 
 
-def _positioned_tender(pos_grade, base_grade="STRONG", num="LA-1", deadline=None):
+def _positioned_tender(pos_grade, base_grade="STRONG", num="LA-1", deadline=None,
+                       plow=0.20, phigh=0.30, days=10):
     intel = BuyerIntel(
         "IMSS", "25401", "med", True, contract_count=5, new_entrant_rate=0.4,
         base_grade=base_grade, confidence="high",
     )
-    intel.position = _position(pos_grade)
+    intel.position = _position(pos_grade, plow=plow, phigh=phigh)
     dl = deadline or datetime.datetime(2026, 1, 20, 9, 0)
     return _tender(
         numero_procedimiento=num, intel=[intel],
-        urgency=Urgency(dl, 10, None, None, "GREEN"),
+        urgency=Urgency(dl, days, None, None, "GREEN"),
     )
 
 
@@ -149,7 +150,7 @@ def test_client_xlsx_uses_strategic_buckets_when_positioned(tmp_path):
     assert "Posicion" in headers
     assert "P Estimada" in headers
     assert "Contratos Previos" in headers
-    assert ws["A7"].value == "OPORTUNIDAD"
+    assert (ws["A7"].value or "").startswith("OPORTUNIDAD")
     pos_col = headers.index("Posicion") + 1
     assert ws.cell(row=7, column=pos_col).value == "CON EXPERIENCIA"
 
@@ -169,22 +170,73 @@ def test_client_xlsx_uses_urgency_buckets_when_no_rfc(tmp_path):
     assert ws["A7"].value in intelligence.BUCKETS
 
 
-def test_oportunidad_sorts_experienced_before_adjacent(tmp_path):
+def test_oportunidad_orders_by_priority_probability_leads(tmp_path):
     from openpyxl import load_workbook
 
-    # ADJACENT closes sooner, but EXPERIENCED must still rank first within
-    # OPORTUNIDAD (category expertise outranks buyer relationship alone).
-    exp = _positioned_tender(
-        "EXPERIENCED", "STRONG", num="EXP",
-        deadline=datetime.datetime(2026, 2, 1, 9, 0),
+    # Higher win-probability tender leads even though it closes later; priority
+    # is P-weighted, so probability dominates deadline proximity.
+    hi = _positioned_tender(
+        "EXPERIENCED", "STRONG", num="HI", plow=0.45, phigh=0.55, days=25,
+        deadline=datetime.datetime(2026, 2, 5, 9, 0),
     )
-    adj = _positioned_tender(
-        "ADJACENT", "STRONG", num="ADJ",
-        deadline=datetime.datetime(2026, 1, 15, 9, 0),
+    lo = _positioned_tender(
+        "ADJACENT", "STRONG", num="LO", plow=0.05, phigh=0.15, days=2,
+        deadline=datetime.datetime(2026, 1, 12, 9, 0),
     )
     path = str(tmp_path / "reporte.xlsx")
-    output.write_client_xlsx([adj, exp], path)
+    output.write_client_xlsx([lo, hi], path)
 
     ws = load_workbook(path)["Resumen"]
-    assert ws["B7"].value == "EXP"
-    assert ws["B8"].value == "ADJ"
+    assert ws["B7"].value == "HI"
+    assert ws["B8"].value == "LO"
+
+
+def test_oportunidad_top5_marked_with_star(tmp_path):
+    from openpyxl import load_workbook
+
+    # Six OPORTUNIDAD tenders; only the top five by priority get the star.
+    ts = [
+        _positioned_tender(
+            "EXPERIENCED", "STRONG", num=f"O{i}",
+            plow=0.50 - 0.05 * i, phigh=0.60 - 0.05 * i,
+            deadline=datetime.datetime(2026, 2, 1, 9, 0),
+        )
+        for i in range(6)
+    ]
+    path = str(tmp_path / "reporte.xlsx")
+    output.write_client_xlsx(ts, path)
+
+    ws = load_workbook(path)["Resumen"]
+    accion = [ws.cell(row=r, column=1).value for r in range(7, 13)]
+    starred = [a for a in accion if a and "\u2605" in a]
+    assert len(starred) == 5
+    # The weakest (O5) is last and unmarked.
+    assert ws["B12"].value == "O5"
+    assert "\u2605" not in (ws["A12"].value or "")
+
+
+def test_top5_is_cross_bucket_high_p_territorio_starred(tmp_path):
+    from openpyxl import load_workbook
+
+    # A high-probability TERRITORIO (incumbent) tender must be starred over a
+    # lower-probability OPORTUNIDAD; the star tracks probability, not novelty.
+    terr = _positioned_tender("INCUMBENT", "STRONG", num="TERR", plow=0.75, phigh=0.85)
+    opps = [
+        _positioned_tender(
+            "EXPERIENCED", "STRONG", num=f"O{i}",
+            plow=0.50 - 0.05 * i, phigh=0.55 - 0.05 * i,
+        )
+        for i in range(5)
+    ]
+    path = str(tmp_path / "reporte.xlsx")
+    output.write_client_xlsx([*opps, terr], path)
+
+    ws = load_workbook(path)["Resumen"]
+    star = {}
+    r = 7
+    while ws.cell(row=r, column=2).value:
+        star[ws.cell(row=r, column=2).value] = "\u2605" in (ws.cell(row=r, column=1).value or "")
+        r += 1
+    assert sum(star.values()) == 5
+    assert star["TERR"] is True      # high-P incumbent starred
+    assert star["O4"] is False       # weakest opportunity excluded

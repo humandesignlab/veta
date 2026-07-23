@@ -41,12 +41,29 @@ ALPHA_INCUMBENCY = 5.0
 ALPHA_CATEGORY = 3.0
 ALPHA_RELATIONSHIP = 4.0
 
+# Minimum contracts in a partida (across any buyer) before we credit category
+# expertise. One or two wins are noise or a misclassification, not proven
+# capability; below this the tender is downgraded from EXPERIENCED to ADJACENT
+# (if there is a buyer relationship) or OUTSIDER.
+MIN_CATEGORY_EVIDENCE = 3
+
 # Incumbency advantage decays with staleness: a win last year counts fully, a
 # win four years ago counts for nothing.
 RECENCY_DECAY = 0.25  # per year
 
 # Probability estimates are capped; nothing in public tendering is a sure thing.
+# Incumbents (prior wins at this buyer+partida) can approach P_WIN_CAP; a company
+# with NO wins at this buyer is held to a lower ceiling, because expertise
+# elsewhere improves odds but does not make a first-time bid a near-certainty.
 P_WIN_CAP = 0.95
+NON_INCUMBENT_P_CAP = 0.55
+
+# openness_shrunk is the market's *collective* new-entrant rate: the share of
+# awards that go to some new entrant, not the odds that one specific outsider
+# wins. So a single undifferentiated new entrant is credited only a fraction of
+# it (NON_INCUMBENT_BASELINE); category/relationship expertise scales that up
+# toward the full market rate, but never past NON_INCUMBENT_P_CAP.
+NON_INCUMBENT_BASELINE = 0.25
 
 # Probability band half-width, tightened when Layer 1 confidence is high.
 BAND_HIGH_CONFIDENCE = 0.05
@@ -104,11 +121,18 @@ def compute_position(
 
     share_of_buyer = _share_of_buyer(client_rfc, siglas, partida, contracts)
 
-    # Effect 2: category transferability (same partida, other buyers).
+    # Effect 2: category transferability (same partida, other buyers). Requires a
+    # minimum number of contracts (MIN_CATEGORY_EVIDENCE) before it counts, so a
+    # lone or misclassified contract cannot masquerade as expertise.
     other_buyers = client[(client["partida"] == partida) & (client["siglas"] != siglas)]
     n_other_buyers = int(other_buyers["siglas"].nunique())
     total_wins_other_buyers = int(len(other_buyers))
-    category_strength = n_other_buyers / (n_other_buyers + ALPHA_CATEGORY)
+    category_qualified = total_wins_other_buyers >= MIN_CATEGORY_EVIDENCE
+    category_strength = (
+        n_other_buyers / (n_other_buyers + ALPHA_CATEGORY)
+        if category_qualified
+        else 0.0
+    )
 
     # Effect 3: relationship breadth (same buyer, other partidas).
     same_buyer = client[client["siglas"] == siglas]
@@ -124,20 +148,32 @@ def compute_position(
     )
 
     if n_prior_wins > 0:
+        # Incumbent: blend the empirical repeat-win rate with the market rate,
+        # weighted by how strong the incumbency is.
         p_win = repeat_win_rate * incumbency_strength + base_rate * (
             1 - incumbency_strength
         )
+        cap = P_WIN_CAP
     else:
-        p_win = base_rate * (1 + position_score)
-    p_win = min(p_win, P_WIN_CAP)
+        # Non-incumbent: scale a fraction of the market's new-entrant rate up
+        # toward the full rate by this company's transferable expertise. With no
+        # incumbency term, position_score spans [0, W_CATEGORY + W_RELATIONSHIP];
+        # normalize it to [0, 1] so a max-expertise outsider reaches the ceiling.
+        denom = W_CATEGORY + W_RELATIONSHIP
+        ns = min(1.0, max(0.0, position_score / denom)) if denom else 0.0
+        p_win = base_rate * (
+            NON_INCUMBENT_BASELINE + (1.0 - NON_INCUMBENT_BASELINE) * ns
+        )
+        cap = NON_INCUMBENT_P_CAP
+    p_win = min(p_win, cap)
 
     half = BAND_HIGH_CONFIDENCE if confidence == "high" else BAND_LOW_CONFIDENCE
     p_low = max(0.0, p_win - half)
-    p_high = min(P_WIN_CAP, p_win + half)
+    p_high = min(cap, p_win + half)
 
     if n_prior_wins > 0:
         grade = "INCUMBENT"
-    elif n_other_buyers > 0:
+    elif category_qualified and n_other_buyers > 0:
         grade = "EXPERIENCED"
     elif n_other_partidas > 0:
         grade = "ADJACENT"

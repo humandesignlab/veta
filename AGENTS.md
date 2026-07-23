@@ -173,15 +173,33 @@ reports/              Generated shortlist files (gitignored)
   `--prospects`/`--sourcing` and client-agnostic runs unchanged). It reads the
   client's own contracts and scores three shrinkage-damped effects: incumbency
   (same buyer+partida, with recency decay), category transfer (same partida,
-  other buyers), and relationship (same buyer, other partidas). It emits a
+  other buyers - only credited with `>=MIN_CATEGORY_EVIDENCE (3)` contracts, so a
+  lone/misclassified win cannot fake expertise; below that it downgrades to
+  ADJACENT or OUTSIDER), and relationship (same buyer, other partidas). It emits a
   `position_grade` (INCUMBENT / EXPERIENCED / ADJACENT / OUTSIDER) and a
-  win-probability band that blends the per-partida `repeat_win_rate`
-  (precomputed at build, stored in `cache_meta.json`, global fallback under key
-  `__global__`) with `openness_shrunk`. Position attaches to `primary_intel`
-  only, so the signal stays single-valued per tender. The probability is an
-  ESTIMATE shown as a band, never a point prediction; all Layer 2 constants
-  (`W_*`, `ALPHA_*`, `RECENCY_DECAY`, `P_WIN_CAP`) are judgment defaults pending
-  the backtest calibration below.
+  win-probability band. Position attaches to `primary_intel` only, so the signal
+  stays single-valued per tender.
+
+  Win-probability model (two regimes, because market openness is not an
+  individual win rate). `openness_shrunk` is the buyer+partida's *collective*
+  new-entrant rate - the share of awards won by some new entrant - not the odds
+  a specific outsider wins:
+  - Incumbent (>=1 prior win here): blends the per-partida `repeat_win_rate`
+    (precomputed at build, in `cache_meta.json`, global fallback `__global__`)
+    with `openness_shrunk`, weighted by incumbency strength. Capped at
+    `P_WIN_CAP=0.95`.
+  - Non-incumbent (no wins at this buyer): scales a fraction of the market rate
+    up by transferable expertise: `p = openness_shrunk * (NON_INCUMBENT_BASELINE
+    + (1-NON_INCUMBENT_BASELINE)*ns)`, where `ns` normalizes the
+    category+relationship score to [0,1]. A cold outsider gets only
+    `NON_INCUMBENT_BASELINE=0.25` of the market rate; the ceiling is
+    `NON_INCUMBENT_P_CAP=0.55`. This is deliberate: a company with zero prior
+    contracts at a buyer should never show a near-certain win, even in a very
+    open market (the earlier `base*(1+score)` form produced 90%+ for
+    non-incumbents, which was not credible).
+  The probability is an ESTIMATE shown as a band, never a point prediction; all
+  Layer 2 constants (`W_*`, `ALPHA_*`, `RECENCY_DECAY`, `P_WIN_CAP`,
+  `NON_INCUMBENT_*`) are judgment defaults pending the backtest calibration below.
 
   Caveat: `repeat_win_rate` rests on only two consecutive year-pairs in the
   2023-2025 window, so it is thin; the per-partida value falls back to the
@@ -225,6 +243,17 @@ reports/              Generated shortlist files (gitignored)
   is None there is no position, so the report keeps the urgency buckets. The
   Resumen adds Posicion / P Estimada / Contratos Previos columns after Señal,
   with position grades in Spanish (TITULAR / CON EXPERIENCIA / ADYACENTE / NUEVO).
+
+  Top-5 actionable slice: the report can run to dozens of tenders, a firehose
+  for a small distributor with limited bid-prep capacity. `output._action_priority`
+  (win probability primary, a bounded deadline-proximity bonus secondary) selects
+  the top `TOP_ACTIONS (5)` across all buckets except NO PRIORITARIO
+  (`_STARRABLE_BUCKETS`) and marks them with a star in the Accion cell - so a
+  high-probability INCUMBENT/TERRITORIO tender is starred alongside a strong
+  OPORTUNIDAD. The star means "act first" by odds, not by novelty. Probability
+  leads deliberately: a near deadline never lets a low-P tender leapfrog a strong
+  one (urgency without a basis is a trap). The OPORTUNIDAD section itself is still
+  sorted by the same priority so its best rows sit at the top.
 
 - Cache freshness nudge: `build` writes `data/aggregated/cache_meta.json`
   (`built` date + `latest_contract` date). Every non-build run prints

@@ -83,11 +83,13 @@ Each tender prints an intelligence card. Read it top to bottom:
   - *Position grade* (`INCUMBENT` / `EXPERIENCED` / `ADJACENT` / `OUTSIDER`) with a
     win-probability band: how well **your** company is placed to win, based on your
     own prior wins at this buyer, this category elsewhere, and other categories at
-    this buyer. This half only appears when a client RFC is configured
-    (`filters.CLIENT_RFC`); the probability is an estimate shown as a range, not a
-    prediction. A `STRONG` market you have never sold into and a `WEAK` market
-    where you are the incumbent are very different bids: the two grades together
-    tell you which.
+    this buyer. This half only appears when a client RFC is set (via `--client-rfc`
+    or `filters.CLIENT_RFC`); the probability is an estimate shown as a range, not a
+    prediction. If you have never sold to this buyer, the estimate is deliberately
+    conservative (capped well below certainty) no matter how open the market —
+    expertise elsewhere improves your odds but a first-time bid is never a sure
+    thing. A `STRONG` market you have never sold into and a `WEAK` market where you
+    are the incumbent are very different bids: the two grades together tell you which.
 - **New entrant rate / [OPEN BUYER]:** the raw openness number. At or above 30
   percent, outsiders actually win here; below that, it tends to be a closed shop.
   (The grade uses a shrunk version of this to avoid small-sample noise.)
@@ -114,6 +116,7 @@ python run.py --raw                # unfiltered pull (all active tenders)
 python run.py --buyer IMSS         # filter by specific buyer
 python run.py --output             # write the client report to reports/reporte-veta-{date}.xlsx
 python run.py --output report.xlsx # or to a specific path (Resumen + Detalle, Spanish)
+python run.py --client-rfc RFC --output r.xlsx  # personalized Layer 2 report (positioning + strategic buckets)
 python run.py --raw-output raw.xlsx # write the raw single-sheet export (internal/debug)
 python run.py --sourcing 51501     # supplier lookup for a partida clave
 python run.py --prospects          # ranked list of potential clients -> reports/prospectos-veta-{date}.xlsx
@@ -147,7 +150,10 @@ is expected, not a hang.
   - **With a client RFC set (personalized view), sorted by strategic value:**
     - **OPORTUNIDAD** (blue): a category you sell elsewhere, or a buyer you
       already work with, has open tenders here that you are not competing for.
-      These blind spots lead the report - they are what Veta reveals.
+      These blind spots lead the report - they are what Veta reveals. Across the
+      whole report, the five most actionable tenders (highest win probability,
+      closing soonest - in any bucket except NO PRIORITARIO) are marked with a ★
+      so a small team knows where to start.
     - **TERRITORIO** (green): buyers where you already win. Monitor and defend.
     - **EXPLORAR** (amber): a strong, open market where you have no history yet.
       A stretch the data says is viable.
@@ -160,11 +166,13 @@ is expected, not a hang.
 
 Use `--raw-output` for the old English single-sheet export (internal/debug).
 
-**Personalizing the report:** set `filters.CLIENT_RFC` to the distributor's RFC.
-That turns on Layer 2 positioning (the position grade in the SIGNAL line) and
-switches the Resumen from urgency buckets to the strategic buckets above, leading
-with the opportunities the client is missing. Left as `None`, the report shows
-market-level intelligence and sorts by urgency.
+**Personalizing the report:** pass `--client-rfc RFC` (e.g.
+`python run.py --client-rfc ACT150219FK1 --output r.xlsx`), or set
+`filters.CLIENT_RFC` as a persistent default. Either turns on Layer 2 positioning
+(the position grade in the SIGNAL line) and switches the Resumen from urgency
+buckets to the strategic buckets above, leading with the opportunities the client
+is missing. With no RFC, the report shows market-level intelligence and sorts by
+urgency.
 
 ### The prospect list (`--prospects`)
 

@@ -7,6 +7,7 @@ Commands:
     python run.py --raw                unfiltered pull (all active tenders)
     python run.py --buyer IMSS         filter the shortlist by buyer siglas
     python run.py --output report.xlsx also write the shortlist to XLSX
+    python run.py --client-rfc RFC --output r.xlsx  Layer 2 (personalized) report
     python run.py --sourcing 51501     supplier lookup for a partida
     python run.py --prospects          ranked list of potential clients (sales)
     python run.py --prospects --qualify  only the outreach-ready sweet spot
@@ -41,6 +42,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="write the client report (Resumen + Detalle); omit FILE for reports/reporte-veta-{date}.xlsx",
     )
     parser.add_argument("--raw-output", metavar="FILE", dest="raw_output", help="write the raw single-sheet export (internal/debug)")
+    parser.add_argument(
+        "--client-rfc", metavar="RFC", dest="client_rfc",
+        help="distributor RFC: turns on Layer 2 positioning + strategic buckets (overrides filters.CLIENT_RFC)",
+    )
     parser.add_argument("--sourcing", metavar="CLAVE", help="supplier lookup for a partida clave")
     parser.add_argument(
         "--prospects", metavar="FILE", nargs="?", const="",
@@ -236,6 +241,14 @@ def main(argv: list[str] | None = None) -> int:
     import sys
 
     args = build_parser().parse_args(argv)
+
+    # --client-rfc overrides the filters.CLIENT_RFC constant for this run so a
+    # Layer 2 report needs no source edit. Read at call time by intelligence and
+    # output, so setting it here (before dispatch) is enough.
+    if args.client_rfc:
+        from veta import filters
+
+        filters.CLIENT_RFC = args.client_rfc.strip().upper()
 
     if args.refresh and not args.build:
         print("--refresh only applies with --build; ignoring it.", file=sys.stderr)

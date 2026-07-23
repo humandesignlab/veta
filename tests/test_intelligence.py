@@ -397,7 +397,9 @@ def test_strategic_bucket_experienced_weak_is_no_prioritario():
     assert intelligence.assign_strategic_bucket(t) == "NO PRIORITARIO"
 
 
-def test_strategic_bucket_no_position_falls_back_to_urgency():
+def test_strategic_bucket_no_position_is_no_prioritario():
+    # No matched history/position in a client run: no basis to win, so the
+    # strategic view parks it in NO PRIORITARIO (never an urgency bucket).
     t = _tender_for_bucket("STRONG: x", 2)
     assert t.primary_intel is None or t.primary_intel.position is None
-    assert intelligence.assign_strategic_bucket(t) == intelligence.assign_bucket(t)
+    assert intelligence.assign_strategic_bucket(t) == "NO PRIORITARIO"
